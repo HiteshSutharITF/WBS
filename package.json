@@ -1,0 +1,16 @@
+{
+  "name": "wbs-whatsapp-business-solution",
+  "version": "1.0.0",
+  "description": "WBS (WhatsApp Business Solution) - Official WhatsApp Cloud API Multi-Tenant Platform",
+  "scripts": {
+    "start": "npm --prefix backend start",
+    "server": "npm --prefix backend start",
+    "dev:backend": "npm --prefix backend run dev",
+    "dev:client": "npm --prefix frontend-client run dev",
+    "dev:admin": "npm --prefix frontend-admin run dev",
+    "build:client": "npm --prefix frontend-client run build",
+    "build:admin": "npm --prefix frontend-admin run build",
+    "build": "npm run build:client && npm run build:admin",
+    "seed": "npm --prefix backend run seed"
+  }
+}

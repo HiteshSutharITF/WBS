@@ -1,0 +1,30 @@
+Give your developer client-onboarding-flow.md. It covers every step with the exact Meta API calls and code. Here are the short answers to their questions.
+What IDs and passwords does a new client need?
+
+• A login on your dashboard: an email and password that your platform stores..
+• Their own Facebook account: they type it into Meta's popup. You never see or store it..
+• A phone number that can receive an OTP (SMS or call):.
+◦ A number already on the WhatsApp Business app can be connected as it is..
+◦ A number on ordinary WhatsApp must have that WhatsApp account deleted first..
+• A payment method, which they add in WhatsApp Manager afterwards..
+What are the steps?
+
+1. The client signs up on your dashboard, which creates tenant 1 in your database..
+2. They click Connect WhatsApp and Meta's popup opens..
+3. In the popup they log in to Facebook, pick or create their business, add their number, enter the OTP and set a display name..
+4. The popup gives your browser code three IDs (waba_id, phone_number_id, business_id) and a one-time code..
+5. Your server then calls four Meta APIs:.
+◦ GET /oauth/access_token turns the code into the client's token..
+◦ POST /{waba_id}/subscribed_apps makes their incoming messages reach your webhook..
+◦ POST /{phone_number_id}/register registers the number, using a 6-digit PIN your server generates..
+◦ GET /{phone_number_id} and GET /{waba_id} fetch the number's details, which you save against tenant 1..
+How do we know it's client 1? Meta doesn't decide that; your database does. The Connect button only appears after the client logs in, so your server takes tenant_id from their login session and saves Meta's IDs on that row. After that, every incoming message is matched to tenant 1 by its phone_number_id. As a safety check, Meta's debug_token call confirms the token really covers that WhatsApp account, so nobody can link someone else's number.
+Which API shows client details on the dashboard? Neither panel calls Meta every time a page loads. Both read from your own database, which fills up during onboarding and stays current through webhooks plus a daily refresh job. The Super Admin panel shows every client; the Client panel shows only that client's rows. The document has a table of which Meta field feeds each part of the dashboard.
+Can we onboard from our dashboard? Yes. It always starts from your dashboard. Your support team can guide a client through it on a call, but the client does the Facebook login and OTP themselves. Never ask a client for either.
+Two corrections from checking Meta's current docs:
+
+• The one-time code expires in 30 seconds. The browser must send it to your server immediately, and the server must exchange it before doing anything else. The old brief didn't say this, and missing it would make onboarding fail at random..
+• Messaging limits now apply to a client's whole business portfolio, shared by all their numbers, not to each number. The field to read is whatsapp_business_manager_messaging_limit; messaging_limit_tier is deprecated..
+I've fixed both in Documents 4 and 6 (now v1.2), the handover document and the Claude Code prompt, and logged them as P-22 in the problems log.
+For testing, your developer should use their own Facebook account and a spare SIM that isn't on WhatsApp. The +1 555 Meta test number can't be connected through the popup.
+Sources: Embedded Signup implementation · Onboarding customers as a Tech Provider · Phone Number Management API · Messaging limits

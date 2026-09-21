@@ -1,0 +1,409 @@
+const env = require('../config/env');
+const { verifyWebhookSignature } = require('../utils/webhookSignature');
+const { WabaAccount, Tenant, Contact, Conversation, Message, ChatbotRule, Template } = require('../models/zindex');
+const cryptoUtils = require('../utils/cryptoUtils');
+const MetaGraphApi = require('../utils/metaGraphApi');
+const socket = require('../config/socket');
+
+/**
+ * Meta Webhook Verification Handshake (GET)
+ */
+const verifyWebhook = (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && token === env.WEBHOOK_VERIFY_TOKEN) {
+    console.log('[Webhook] Verification handshake successful.');
+    return res.status(200).send(challenge);
+  }
+
+  console.warn('[Webhook] Verification handshake failed.');
+  return res.sendStatus(403);
+};
+
+/**
+ * Inbound Webhook Event Processor (POST)
+ */
+const handleWebhook = async (req, res) => {
+  // Acknowledge Meta immediately within 2 seconds
+  res.status(200).send('EVENT_RECEIVED');
+
+  // Verify signature if secret provided and not in mock fallback
+  const signature = req.headers['x-hub-signature-256'];
+  if (req.rawBody && !verifyWebhookSignature(req.rawBody, signature)) {
+    console.warn('[Webhook] Invalid X-Hub-Signature-256 rejected.');
+    return;
+  }
+
+  try {
+    const body = req.body;
+    if (body.object !== 'whatsapp_business_account' || !body.entry) {
+      return;
+    }
+
+    for (const entry of body.entry) {
+      const changes = entry.changes || [];
+      for (const change of changes) {
+        const value = change.value;
+        if (!value) continue;
+
+        // 1. Check for incoming messages
+        if (value.messages && value.metadata) {
+          const phoneNumberId = value.metadata.phone_number_id;
+
+          // Route to tenant
+          const waba = await WabaAccount.findOne({ phoneNumberId });
+          if (!waba) {
+            console.warn(`[Webhook] Unrecognized phone_number_id: ${phoneNumberId}`);
+            continue;
+          }
+
+          const tenant = await Tenant.findById(waba.tenantId);
+          if (!tenant || tenant.status === 'suspended') {
+            continue;
+          }
+
+          for (const msg of value.messages) {
+            await processIncomingMessage(msg, value.contacts, waba, tenant);
+          }
+        }
+
+        // 2. Check for message delivery / read / failed status updates
+        if (value.statuses) {
+          for (const statusObj of value.statuses) {
+            await processMessageStatus(statusObj);
+          }
+        }
+
+        // 3. Check for template status updates
+        if (change.field === 'message_template_status_update') {
+          await processTemplateStatus(value);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('[Webhook] Processing error:', error.message);
+  }
+};
+
+/**
+ * Process a single incoming WhatsApp message
+ */
+async function processIncomingMessage(msg, metaContacts, waba, tenant) {
+  const wamid = msg.id;
+
+  // Deduplication check by wamid (PL-07)
+  const existingMsg = await Message.findOne({ wamid });
+  if (existingMsg) {
+    return;
+  }
+
+  const senderPhone = msg.from;
+  const profileName = metaContacts?.[0]?.profile?.name || 'WhatsApp Customer';
+
+  // 1. Find or create Contact
+  let contact = await Contact.findOne({ tenantId: tenant._id, phone: senderPhone });
+  const isFirstTimeLead = !contact;
+
+  if (!contact) {
+    contact = await Contact.create({
+      tenantId: tenant._id,
+      phone: senderPhone,
+      name: profileName,
+      leadStage: 'new',
+      source: 'direct_inbound',
+      optInStatus: true,
+      optInSource: 'inbound_message',
+      lastInboundAt: new Date()
+    });
+  } else {
+    contact.lastInboundAt = new Date();
+    await contact.save();
+  }
+
+  // 2. Find or create Conversation
+  let conversation = await Conversation.findOne({ tenantId: tenant._id, contactId: contact._id });
+  if (!conversation) {
+    conversation = await Conversation.create({
+      tenantId: tenant._id,
+      contactId: contact._id,
+      status: 'open',
+      lastCustomerMessageAt: new Date()
+    });
+  } else {
+    conversation.lastCustomerMessageAt = new Date(); // Reset 24-hour service window
+    conversation.unreadCount = (conversation.unreadCount || 0) + 1;
+    conversation.status = 'open';
+  }
+
+  // 3. Extract content & type
+  let content = '';
+  let messageType = 'text';
+  let mediaUrl = '';
+
+  if (msg.type === 'text') {
+    content = msg.text?.body || '';
+  } else if (['image', 'document', 'audio', 'video'].includes(msg.type)) {
+    messageType = msg.type;
+    content = msg[msg.type]?.caption || `[${msg.type.toUpperCase()}]`;
+    mediaUrl = msg[msg.type]?.id || '';
+  } else if (msg.type === 'interactive') {
+    messageType = 'interactive';
+    content = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || 'Interactive response';
+  } else {
+    content = `[${msg.type.toUpperCase()}]`;
+  }
+
+  // 4. Save Inbound Message
+  const savedMessage = await Message.create({
+    tenantId: tenant._id,
+    conversationId: conversation._id,
+    contactId: contact._id,
+    wamid,
+    direction: 'inbound',
+    senderType: 'customer',
+    messageType,
+    content,
+    mediaUrl,
+    status: 'delivered',
+    sentAt: new Date(parseInt(msg.timestamp) * 1000 || Date.now())
+  });
+
+  conversation.lastMessageText = content;
+  conversation.lastMessageAt = new Date();
+  await conversation.save();
+
+  // Real-time socket broadcast to client dashboard
+  socket.emitToConversation(conversation._id, 'new_message', savedMessage);
+  socket.emitToTenant(tenant._id, 'conversation_message', {
+    conversationId: conversation._id,
+    message: savedMessage,
+    contact: { id: contact._id, name: contact.name, phone: contact.phone }
+  });
+
+  // 5. Check Opt-out Rule: "STOP" or "UNSUBSCRIBE" (PL-02)
+  const cleanUpper = content.trim().toUpperCase();
+  if (['STOP', 'UNSUBSCRIBE', 'CANCEL'].includes(cleanUpper)) {
+    contact.optInStatus = false;
+    contact.optOutDate = new Date();
+    await contact.save();
+
+    // Auto-reply confirming opt-out
+    await sendBotReply(
+      waba,
+      tenant,
+      conversation,
+      contact,
+      'You have been unsubscribed from receiving promotional messages. Reply START to resubscribe.'
+    );
+    return;
+  }
+
+  // 6. Check Bot Automation (CL-30, CL-31, CL-34)
+  if (conversation.isBotPaused) {
+    // Human hand-off is active: do not trigger automated replies
+    return;
+  }
+
+  const token = cryptoUtils.decrypt(waba.encryptedToken);
+
+  // Check Keyword Rules
+  const rules = await ChatbotRule.find({ tenantId: tenant._id, isActive: true }).sort({ priority: -1 });
+  let matchedRule = null;
+
+  for (const rule of rules) {
+    if (rule.triggerType === 'keyword') {
+      const match = rule.keywords.some((kw) => {
+        const textLower = content.toLowerCase();
+        if (rule.matchType === 'exact') return textLower === kw;
+        if (rule.matchType === 'starts_with') return textLower.startsWith(kw);
+        return textLower.includes(kw);
+      });
+      if (match) {
+        matchedRule = rule;
+        break;
+      }
+    }
+  }
+
+  if (matchedRule) {
+    // Execute rule actions
+    if (matchedRule.actions?.addTag && !contact.tags.includes(matchedRule.actions.addTag)) {
+      contact.tags.push(matchedRule.actions.addTag);
+      await contact.save();
+    }
+    if (matchedRule.actions?.updateLeadStage) {
+      contact.leadStage = matchedRule.actions.updateLeadStage;
+      await contact.save();
+    }
+
+    // Human Hand-off trigger
+    if (matchedRule.responseType === 'hand_off' || matchedRule.actions?.pauseBot) {
+      conversation.isBotPaused = true;
+      conversation.handedOffAt = new Date();
+      conversation.status = 'open';
+      if (matchedRule.actions?.assignAgentId) {
+        conversation.assignedAgentId = matchedRule.actions.assignAgentId;
+      }
+      await conversation.save();
+
+      socket.emitToTenant(tenant._id, 'lead_handed_off', {
+        conversationId: conversation._id,
+        contact: { id: contact._id, name: contact.name, phone: contact.phone }
+      });
+    }
+
+    // Send automated response if configured
+    if (matchedRule.responseText) {
+      await sendBotReply(waba, tenant, conversation, contact, matchedRule.responseText);
+    }
+    return;
+  }
+
+  // If first-time inbound lead, check Welcome Message rule
+  if (isFirstTimeLead) {
+    const welcomeRule = await ChatbotRule.findOne({
+      tenantId: tenant._id,
+      triggerType: 'welcome',
+      isActive: true
+    });
+    if (welcomeRule && welcomeRule.responseText) {
+      await sendBotReply(waba, tenant, conversation, contact, welcomeRule.responseText);
+      return;
+    }
+  }
+
+  // Check Away Message rule if outside working hours
+  if (tenant.workingHours?.enabled) {
+    const isOutsideHours = checkIfOutsideWorkingHours(tenant.workingHours);
+    if (isOutsideHours) {
+      const awayRule = await ChatbotRule.findOne({
+        tenantId: tenant._id,
+        triggerType: 'away',
+        isActive: true
+      });
+      if (awayRule && awayRule.responseText) {
+        await sendBotReply(waba, tenant, conversation, contact, awayRule.responseText);
+      }
+    }
+  }
+}
+
+/**
+ * Send automated bot response
+ */
+async function sendBotReply(waba, tenant, conversation, contact, replyText) {
+  try {
+    const token = cryptoUtils.decrypt(waba.encryptedToken);
+    const recipientPhone = contact.phone.replace(/[^\d]/g, '');
+
+    const metaPayload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipientPhone,
+      type: 'text',
+      text: { body: replyText }
+    };
+
+    const metaRes = await MetaGraphApi.sendMessage(waba.phoneNumberId, token, metaPayload);
+    const wamid = metaRes?.messages?.[0]?.id || `wamid.bot_${Date.now()}`;
+
+    const botMessage = await Message.create({
+      tenantId: tenant._id,
+      conversationId: conversation._id,
+      contactId: contact._id,
+      wamid,
+      direction: 'outbound',
+      senderType: 'bot',
+      messageType: 'text',
+      content: replyText,
+      status: 'sent',
+      sentAt: new Date()
+    });
+
+    conversation.lastMessageText = replyText;
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
+
+    socket.emitToConversation(conversation._id, 'new_message', botMessage);
+    socket.emitToTenant(tenant._id, 'conversation_message', {
+      conversationId: conversation._id,
+      message: botMessage
+    });
+  } catch (err) {
+    console.error('[Webhook] Failed to send bot reply:', err.message);
+  }
+}
+
+/**
+ * Process delivery / read / failed status update
+ */
+async function processMessageStatus(statusObj) {
+  const wamid = statusObj.id;
+  const status = statusObj.status; // 'sent', 'delivered', 'read', 'failed'
+
+  const message = await Message.findOne({ wamid });
+  if (!message) return;
+
+  message.status = status;
+  if (status === 'delivered') message.deliveredAt = new Date();
+  if (status === 'read') message.readAt = new Date();
+  if (status === 'failed' && statusObj.errors) {
+    message.errorCode = String(statusObj.errors[0]?.code || '');
+    message.errorMessage = statusObj.errors[0]?.title || statusObj.errors[0]?.message || 'Message delivery failed';
+  }
+
+  await message.save();
+
+  socket.emitToTenant(message.tenantId, 'message_status_updated', {
+    messageId: message._id,
+    wamid,
+    status: message.status,
+    errorCode: message.errorCode,
+    errorMessage: message.errorMessage
+  });
+}
+
+/**
+ * Process Meta Template status update
+ */
+async function processTemplateStatus(value) {
+  const metaTemplateId = value.message_template_id;
+  const event = value.event; // 'APPROVED', 'REJECTED', 'PAUSED'
+
+  if (metaTemplateId) {
+    await Template.findOneAndUpdate(
+      { metaTemplateId },
+      {
+        status: event,
+        rejectionReason: value.reason || ''
+      }
+    );
+  }
+}
+
+/**
+ * Utility: check if current time is outside working hours
+ */
+function checkIfOutsideWorkingHours(workingHours) {
+  const now = new Date();
+  const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, ...
+  if (workingHours.days && !workingHours.days.includes(currentDay)) {
+    return true;
+  }
+
+  const [startH, startM] = (workingHours.start || '09:00').split(':').map(Number);
+  const [endH, endM] = (workingHours.end || '18:00').split(':').map(Number);
+
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  const startMinutes = startH * 60 + startM;
+  const endMinutes = endH * 60 + endM;
+
+  return currentMinutes < startMinutes || currentMinutes > endMinutes;
+}
+
+module.exports = {
+  verifyWebhook,
+  handleWebhook
+};
