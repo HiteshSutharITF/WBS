@@ -8,7 +8,7 @@ class MetaGraphApi {
    * Exchange Embedded Signup code for a Business Access Token
    * Note: The one-time code expires in 30 seconds!
    */
-  static async exchangeCodeForToken(code) {
+  static async exchangeCodeForToken(code, redirectUri) {
     if (code && (code.startsWith('mock_') || code.startsWith('simulated_'))) {
       return {
         access_token: `mock_access_token_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`,
@@ -26,13 +26,15 @@ class MetaGraphApi {
     }
 
     try {
-      const response = await axios.get(`${BASE_URL}/oauth/access_token`, {
-        params: {
-          client_id: env.META_APP_ID,
-          client_secret: env.META_APP_SECRET,
-          code
-        }
-      });
+      const params = {
+        client_id: env.META_APP_ID,
+        client_secret: env.META_APP_SECRET,
+        code
+      };
+      if (redirectUri) {
+        params.redirect_uri = redirectUri;
+      }
+      const response = await axios.get(`${BASE_URL}/oauth/access_token`, { params });
       return response.data;
     } catch (error) {
       if (env.ENABLE_MOCK_FALLBACK) {

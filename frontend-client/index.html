@@ -9,6 +9,18 @@
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   </head>
   <body>
+    <!-- OAuth Popup Callback Helper: forwards code to opener window and closes popup -->
+    <script>
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        if (code && window.opener) {
+          window.opener.postMessage({ type: 'META_AUTH_CODE', code: code }, '*');
+          window.close();
+        }
+      } catch (e) {}
+    </script>
+
     <div id="root"></div>
 
     <!-- Meta Facebook JavaScript SDK for Embedded Signup v4 -->

@@ -47,6 +47,13 @@ const RedirectToAdmin = () => {
 };
 
 function App() {
+  useEffect(() => {
+    if (window.location.pathname.startsWith('/onboarding')) {
+      const search = window.location.search || '';
+      window.location.replace(`/#/onboarding${search}`);
+    }
+  }, []);
+
   return (
     <HashRouter>
       <Routes>

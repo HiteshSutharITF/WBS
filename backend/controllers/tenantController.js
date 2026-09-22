@@ -51,14 +51,13 @@ const updateWorkingHours = async (req, res, next) => {
 const completeWhatsAppOnboarding = async (req, res, next) => {
   try {
     const tenantId = req.tenantId;
-    const { code, waba_id, phone_number_id, business_id, direct_token } = req.body;
-
+    const { code, waba_id, phone_number_id, business_id, direct_token, redirect_uri } = req.body;
     let accessToken = direct_token;
     let tokenExpiry = new Date(Date.now() + 60 * 24 * 60 * 60 * 1000); // 60 days default
 
     // 1. If authorization code received from Embedded Signup, exchange within 30s
     if (code) {
-      const exchangeResult = await MetaGraphApi.exchangeCodeForToken(code);
+      const exchangeResult = await MetaGraphApi.exchangeCodeForToken(code, redirect_uri);
       accessToken = exchangeResult.access_token;
       if (exchangeResult.expires_in) {
         tokenExpiry = new Date(Date.now() + exchangeResult.expires_in * 1000);

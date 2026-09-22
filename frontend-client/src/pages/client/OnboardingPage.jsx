@@ -62,13 +62,40 @@ const OnboardingPage = () => {
     }
   };
 
+  // Exchange code helper
+  const handleExchangeCode = async (codeParam) => {
+    setConnecting(true);
+    setErrorMsg('');
+    try {
+      const res = await tenantService.completeOnboarding({
+        code: codeParam,
+        redirect_uri: `${window.location.origin}/onboarding`,
+        waba_id: signupDataRef.current.waba_id,
+        phone_number_id: signupDataRef.current.phone_number_id,
+        business_id: signupDataRef.current.business_id
+      });
+      setSuccessMsg(res.message || 'WhatsApp Business Account successfully connected!');
+      loadProfile();
+    } catch (err) {
+      setErrorMsg(err.message || 'Failed to complete Meta token exchange.');
+    } finally {
+      setConnecting(false);
+    }
+  };
+
   useEffect(() => {
     loadProfile();
 
     // 1. Listen for Meta's Embedded Signup postMessage events as documented in client-onboarding-flow.md
     const handleMetaMessage = (event) => {
+      // Handle OAuth popup callback from our own origin
+      if (event.data?.type === 'META_AUTH_CODE' && event.data.code) {
+        handleExchangeCode(event.data.code);
+        return;
+      }
+
       // Security: verify origin ends with facebook.com
-      if (!event.origin.endsWith('facebook.com')) return;
+      if (!event.origin || !event.origin.endsWith('facebook.com')) return;
 
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
@@ -104,25 +131,8 @@ const OnboardingPage = () => {
       : new URLSearchParams();
     const codeParam = searchParams.get('code') || hashParams.get('code');
     if (codeParam) {
-      setConnecting(true);
       window.history.replaceState({}, document.title, window.location.pathname + window.location.hash.split('?')[0]);
-      tenantService
-        .completeOnboarding({
-          code: codeParam,
-          waba_id: signupDataRef.current.waba_id,
-          phone_number_id: signupDataRef.current.phone_number_id,
-          business_id: signupDataRef.current.business_id
-        })
-        .then((res) => {
-          setSuccessMsg(res.message || 'WhatsApp Business Account successfully connected!');
-          loadProfile();
-        })
-        .catch((err) => {
-          setErrorMsg(err.message || 'Failed to complete Meta token exchange.');
-        })
-        .finally(() => {
-          setConnecting(false);
-        });
+      handleExchangeCode(codeParam);
     }
   }, []);
 
@@ -138,23 +148,11 @@ const OnboardingPage = () => {
         window.FB.login(
           async (response) => {
             if (response.authResponse && response.authResponse.code) {
-              try {
-                // The authorization code expires in 30 SECONDS — send to server immediately!
-                const res = await tenantService.completeOnboarding({
-                  code: response.authResponse.code,
-                  waba_id: signupDataRef.current.waba_id,
-                  phone_number_id: signupDataRef.current.phone_number_id,
-                  business_id: signupDataRef.current.business_id
-                });
-                setSuccessMsg(res.message || 'WhatsApp Business Account successfully connected!');
-                loadProfile();
-              } catch (err) {
-                setErrorMsg(err.message || 'Failed to complete Meta token exchange.');
-              }
+              handleExchangeCode(response.authResponse.code);
             } else {
               setErrorMsg('Meta Facebook Login was closed or did not return an authorization code.');
+              setConnecting(false);
             }
-            setConnecting(false);
           },
           {
             config_id: '4546265418941622',
@@ -170,9 +168,9 @@ const OnboardingPage = () => {
       }
     }
 
-    // If on HTTP or FB SDK unavailable, open direct Meta OAuth dialog in popup window
+    // Direct Meta OAuth dialog in popup window (clean redirect_uri with no URL fragment)
     try {
-      const redirectUri = `${window.location.origin}/#/onboarding`;
+      const redirectUri = `${window.location.origin}/onboarding`;
       const metaOAuthUrl = `https://www.facebook.com/v25.0/dialog/oauth?client_id=1075294524979498&config_id=4546265418941622&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`;
       const popup = window.open(metaOAuthUrl, 'MetaEmbeddedSignup', 'width=650,height=750,scrollbars=yes');
 

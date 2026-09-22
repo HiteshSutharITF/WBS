@@ -7,10 +7,22 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script type="module" crossorigin src="/assets/index-Bb1fc4UG.js"></script>
+    <script type="module" crossorigin src="/assets/index-BJr0QY2O.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-Bhf-NZHW.css">
   </head>
   <body>
+    <!-- OAuth Popup Callback Helper: forwards code to opener window and closes popup -->
+    <script>
+      try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const code = urlParams.get('code');
+        if (code && window.opener) {
+          window.opener.postMessage({ type: 'META_AUTH_CODE', code: code }, '*');
+          window.close();
+        }
+      } catch (e) {}
+    </script>
+
     <div id="root"></div>
 
     <!-- Meta Facebook JavaScript SDK for Embedded Signup v4 -->
