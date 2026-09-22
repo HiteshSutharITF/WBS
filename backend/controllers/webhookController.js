@@ -370,16 +370,40 @@ async function processMessageStatus(statusObj) {
  */
 async function processTemplateStatus(value) {
   const metaTemplateId = value.message_template_id;
-  const event = value.event; // 'APPROVED', 'REJECTED', 'PAUSED'
+  const templateName = value.message_template_name ? value.message_template_name.toLowerCase() : null;
+  const event = value.event; // 'APPROVED', 'REJECTED', 'PAUSED', 'DISABLED'
+  const reason = value.reason || '';
 
-  if (metaTemplateId) {
-    await Template.findOneAndUpdate(
-      { metaTemplateId },
-      {
-        status: event,
-        rejectionReason: value.reason || ''
-      }
-    );
+  const filter = {};
+  if (metaTemplateId && templateName) {
+    filter.$or = [{ metaTemplateId }, { name: templateName }];
+  } else if (metaTemplateId) {
+    filter.metaTemplateId = metaTemplateId;
+  } else if (templateName) {
+    filter.name = templateName;
+  } else {
+    return;
+  }
+
+  const updated = await Template.findOneAndUpdate(
+    filter,
+    {
+      metaTemplateId: metaTemplateId || undefined,
+      status: event,
+      rejectionReason: reason
+    },
+    { new: true }
+  );
+
+  if (updated) {
+    console.log(`[Webhook] Meta template "${updated.name}" is now ${event} for tenant ${updated.tenantId}`);
+    socket.emitToTenant(updated.tenantId, 'template_status_updated', {
+      templateId: updated._id,
+      metaTemplateId: updated.metaTemplateId,
+      name: updated.name,
+      status: updated.status,
+      rejectionReason: updated.rejectionReason
+    });
   }
 }
 

@@ -12,6 +12,7 @@ import {
   MessageSquare
 } from 'lucide-react';
 import { templateService } from '../../services/templateService';
+import { getSocket } from '../../utils/socket';
 import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Badge from '../../components/common/Badge';
@@ -59,6 +60,38 @@ const TemplatesPage = () => {
 
   useEffect(() => {
     fetchTemplates();
+
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleTemplateStatus = (payload) => {
+      setTemplates((prev) =>
+        prev.map((tmpl) => {
+          if (
+            tmpl._id === payload.templateId ||
+            (payload.metaTemplateId && tmpl.metaTemplateId === payload.metaTemplateId) ||
+            (payload.name && tmpl.name === payload.name)
+          ) {
+            return {
+              ...tmpl,
+              metaTemplateId: payload.metaTemplateId || tmpl.metaTemplateId,
+              status: payload.status,
+              rejectionReason: payload.rejectionReason
+            };
+          }
+          return tmpl;
+        })
+      );
+      setMessageAlert({
+        type: payload.status === 'APPROVED' ? 'success' : payload.status === 'REJECTED' ? 'error' : 'warning',
+        text: `Real-time Meta Update: Template "${payload.name}" is now ${payload.status}!${payload.rejectionReason ? ` Reason: ${payload.rejectionReason}` : ''}`
+      });
+    };
+
+    socket.on('template_status_updated', handleTemplateStatus);
+    return () => {
+      socket.off('template_status_updated', handleTemplateStatus);
+    };
   }, [categoryFilter]);
 
   const handleSyncMeta = async () => {

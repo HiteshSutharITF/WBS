@@ -109,7 +109,7 @@ const createTemplate = async (req, res, next) => {
       name: name.toLowerCase(),
       category,
       language: language || 'en_US',
-      status: metaRes?.status || 'APPROVED', // Default to APPROVED in mock / immediate test
+      status: metaRes?.status || 'PENDING', // Live Meta templates start in PENDING review
       header: header || { format: 'NONE' },
       body,
       footer: footer || { text: '' },
@@ -142,24 +142,35 @@ const syncTemplates = async (req, res, next) => {
     const token = cryptoUtils.decrypt(waba.encryptedToken);
     const metaTemplates = await MetaGraphApi.listMessageTemplates(waba.wabaId, token);
 
-    let updatedCount = 0;
+    let syncedCount = 0;
     if (metaTemplates && Array.isArray(metaTemplates.data)) {
       for (const item of metaTemplates.data) {
-        const local = await Template.findOneAndUpdate(
-          { tenantId: req.tenantId, name: item.name },
+        const { header, body, footer, buttons } = MetaGraphApi.parseMetaTemplateComponents(item.components);
+
+        // Upsert so both existing AND previously approved Meta templates are fetched/imported!
+        await Template.findOneAndUpdate(
+          { tenantId: req.tenantId, name: item.name.toLowerCase() },
           {
+            tenantId: req.tenantId,
             metaTemplateId: item.id,
-            status: item.status,
-            rejectionReason: item.rejected_reason || ''
+            name: item.name.toLowerCase(),
+            category: item.category || 'MARKETING',
+            language: item.language || 'en_US',
+            status: item.status || 'APPROVED',
+            rejectionReason: item.rejected_reason || '',
+            header,
+            body: body?.text ? body : { text: item.name },
+            footer,
+            buttons
           },
-          { new: true }
+          { upsert: true, new: true, setDefaultsOnInsert: true }
         );
-        if (local) updatedCount++;
+        syncedCount++;
       }
     }
 
     const all = await Template.find({ tenantId: req.tenantId }).sort({ createdAt: -1 });
-    return ApiResponse.success(res, `Templates synchronized (${updatedCount} updated from Meta).`, all);
+    return ApiResponse.success(res, `Templates synchronized (${syncedCount} templates fetched/updated from Meta).`, all);
   } catch (error) {
     next(error);
   }
@@ -172,6 +183,17 @@ const deleteTemplate = async (req, res, next) => {
 
     if (!template) {
       return ApiResponse.notFound(res, 'Template not found.');
+    }
+
+    // Also attempt deletion on Meta Cloud API
+    const waba = await WabaAccount.findOne({ tenantId: req.tenantId });
+    if (waba && waba.encryptedToken && waba.wabaId) {
+      try {
+        const token = cryptoUtils.decrypt(waba.encryptedToken);
+        await MetaGraphApi.deleteMessageTemplate(waba.wabaId, token, template.name);
+      } catch (metaErr) {
+        console.warn('[Meta Template Delete] Could not delete from Meta directly:', metaErr.message);
+      }
     }
 
     await Template.findByIdAndDelete(templateId);

@@ -1,5 +1,5 @@
 const ApiResponse = require('../utils/apiResponse');
-const { Tenant, WabaAccount, AuditLog } = require('../models/zindex');
+const { Tenant, WabaAccount, Template, AuditLog } = require('../models/zindex');
 const cryptoUtils = require('../utils/cryptoUtils');
 const MetaGraphApi = require('../utils/metaGraphApi');
 const env = require('../config/env');
@@ -130,6 +130,35 @@ const completeWhatsAppOnboarding = async (req, res, next) => {
       },
       ipAddress: req.ip
     });
+
+    // 8. Auto-fetch and import any existing approved templates from Meta WABA
+    try {
+      const metaTemplates = await MetaGraphApi.listMessageTemplates(effectiveWabaId, accessToken);
+      if (metaTemplates && Array.isArray(metaTemplates.data)) {
+        for (const item of metaTemplates.data) {
+          const { header, body, footer, buttons } = MetaGraphApi.parseMetaTemplateComponents(item.components);
+          await Template.findOneAndUpdate(
+            { tenantId, name: item.name.toLowerCase() },
+            {
+              tenantId,
+              metaTemplateId: item.id,
+              name: item.name.toLowerCase(),
+              category: item.category || 'MARKETING',
+              language: item.language || 'en_US',
+              status: item.status || 'APPROVED',
+              rejectionReason: item.rejected_reason || '',
+              header,
+              body: body?.text ? body : { text: item.name },
+              footer,
+              buttons
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+          );
+        }
+      }
+    } catch (tmplErr) {
+      console.warn('[Onboarding] Template auto-fetch notice:', tmplErr.message);
+    }
 
     return ApiResponse.success(res, 'WhatsApp Business Account successfully connected!', {
       wabaId: wabaAccount.wabaId,

@@ -280,6 +280,7 @@ class MetaGraphApi {
 
     try {
       const response = await axios.get(`${BASE_URL}/${wabaId}/message_templates`, {
+        params: { limit: 250 },
         headers: { Authorization: `Bearer ${businessToken}` }
       });
       return response.data;
@@ -289,6 +290,67 @@ class MetaGraphApi {
       }
       throw new Error(error.response?.data?.error?.message || error.message);
     }
+  }
+
+  /**
+   * Delete message template on Meta WABA
+   */
+  static async deleteMessageTemplate(wabaId, businessToken, templateName) {
+    if (env.ENABLE_MOCK_FALLBACK && (!businessToken || businessToken.startsWith('mock_'))) {
+      return { success: true };
+    }
+
+    try {
+      const response = await axios.delete(`${BASE_URL}/${wabaId}/message_templates`, {
+        params: { name: templateName },
+        headers: { Authorization: `Bearer ${businessToken}` }
+      });
+      return response.data;
+    } catch (error) {
+      if (env.ENABLE_MOCK_FALLBACK) {
+        return { success: true };
+      }
+      const errData = error.response?.data?.error;
+      const errorMsg = errData ? `[Meta ${errData.code}] ${errData.message}` : error.message;
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
+   * Parse Meta template components into local schema format
+   */
+  static parseMetaTemplateComponents(components = []) {
+    let header = { format: 'NONE', text: '', mediaUrl: '' };
+    let body = { text: '', sampleVariables: [] };
+    let footer = { text: '' };
+    let buttons = [];
+
+    for (const comp of components) {
+      if (comp.type === 'HEADER') {
+        header = {
+          format: comp.format || 'NONE',
+          text: comp.text || '',
+          mediaUrl: ''
+        };
+      } else if (comp.type === 'BODY') {
+        body = {
+          text: comp.text || '',
+          sampleVariables: comp.example?.body_text?.[0] || []
+        };
+      } else if (comp.type === 'FOOTER') {
+        footer = {
+          text: comp.text || ''
+        };
+      } else if (comp.type === 'BUTTONS') {
+        buttons = (comp.buttons || []).map((btn) => ({
+          type: btn.type || 'QUICK_REPLY',
+          text: btn.text || '',
+          value: btn.url || btn.phone_number || ''
+        }));
+      }
+    }
+
+    return { header, body, footer, buttons };
   }
 }
 
