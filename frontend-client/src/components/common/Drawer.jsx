@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 /**
@@ -51,9 +52,9 @@ const Drawer = ({
     full: 'max-w-full'
   }[size] || 'max-w-5xl';
 
-  return (
-    <div className="fixed inset-0 z-50 overflow-hidden">
-      {/* Backdrop */}
+  return createPortal(
+    <div className="fixed inset-0 z-[100] overflow-hidden">
+      {/* Full-screen Backdrop overlay covering topbar and sidebar */}
       <div
         className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity duration-300"
         onClick={onClose}
@@ -61,7 +62,7 @@ const Drawer = ({
       />
 
       {/* Drawer Panel Container */}
-      <div className="fixed inset-y-0 right-0 max-w-full flex pl-0 sm:pl-10">
+      <div className="fixed inset-y-0 right-0 max-w-full flex pl-0 sm:pl-10 z-10">
         <div
           className={`w-screen ${sizeClasses} bg-white shadow-2xl flex flex-col h-full overflow-hidden border-l border-slate-200 transform transition-all duration-300 ease-in-out`}
           role="dialog"
@@ -102,7 +103,8 @@ const Drawer = ({
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 

@@ -1,12 +1,15 @@
 import React, { useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 
 /**
  * Modal Component complying with MERN SOP:
- * 1. Fixed Header
- * 2. Fixed Footer
- * 3. Only Content scrollable
- * 4. Responsive: Bottom sheet on mobile screens
+ * 1. Portaled to document.body so it covers the entire viewport (topbar, sidebar, main)
+ * 2. Fixed Header
+ * 3. Fixed Footer
+ * 4. Only Content scrollable
+ * 5. Responsive: Bottom sheet on mobile screens
+ * 6. Body scroll locking when open
  */
 const Modal = ({ isOpen, onClose, title, children, footer, size = 'md' }) => {
   useEffect(() => {
@@ -15,8 +18,16 @@ const Modal = ({ isOpen, onClose, title, children, footer, size = 'md' }) => {
         onClose();
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+
+    if (isOpen) {
+      document.body.style.overflow = 'hidden';
+      window.addEventListener('keydown', handleKeyDown);
+    }
+
+    return () => {
+      document.body.style.overflow = '';
+      window.removeEventListener('keydown', handleKeyDown);
+    };
   }, [isOpen, onClose]);
 
   if (!isOpen) return null;
@@ -26,14 +37,25 @@ const Modal = ({ isOpen, onClose, title, children, footer, size = 'md' }) => {
     md: 'max-w-xl',
     lg: 'max-w-3xl',
     xl: 'max-w-5xl',
+    '2xl': 'max-w-6xl',
+    '4xl': 'max-w-7xl',
+    full: 'max-w-full'
   }[size] || 'max-w-xl';
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-0 md:p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4 overflow-y-auto">
+      {/* Full-screen Backdrop overlay covering topbar and sidebar */}
       <div
-        className={`w-full ${sizeClasses} bg-white shadow-2xl flex flex-col max-h-[92vh] md:rounded-2xl overflow-hidden
-          max-md:fixed max-md:bottom-0 max-md:rounded-t-2xl max-md:rounded-b-none max-md:max-h-[85vh]`}
+        className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+
+      <div
+        className={`relative z-10 w-full ${sizeClasses} bg-white shadow-2xl flex flex-col max-h-[92vh] md:rounded-2xl overflow-hidden
+          max-md:fixed max-md:bottom-0 max-md:rounded-t-2xl max-md:rounded-b-none max-md:max-h-[85vh] my-auto`}
         role="dialog"
+        aria-modal="true"
       >
         {/* Fixed Header */}
         <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-white">
@@ -59,7 +81,8 @@ const Modal = ({ isOpen, onClose, title, children, footer, size = 'md' }) => {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
