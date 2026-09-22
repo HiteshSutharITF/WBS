@@ -1,5 +1,5 @@
-import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 
 // Layout
 import ClientLayout from './components/layout/ClientLayout';
@@ -39,9 +39,16 @@ const PublicRoute = ({ children }) => {
   return children;
 };
 
+const RedirectToAdmin = () => {
+  useEffect(() => {
+    window.location.href = '/admin/#/';
+  }, []);
+  return null;
+};
+
 function App() {
   return (
-    <BrowserRouter>
+    <HashRouter>
       <Routes>
         {/* Public Routes */}
         <Route
@@ -55,6 +62,10 @@ function App() {
         <Route
           path="/register"
           element={<Navigate to="/login" replace />}
+        />
+        <Route
+          path="/superadmin"
+          element={<RedirectToAdmin />}
         />
 
         {/* Client Business Panel Routes */}
@@ -80,7 +91,7 @@ function App() {
         {/* 404 Route */}
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 

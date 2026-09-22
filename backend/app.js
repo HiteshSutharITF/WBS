@@ -106,6 +106,11 @@ const adminPublicDir = path.join(publicDir, 'admin');
 app.use('/admin', express.static(adminPublicDir));
 app.use(express.static(publicDir));
 
+// Redirect /superadmin to /admin/#/
+app.get('/superadmin*', (req, res) => {
+  return res.redirect(301, '/admin/#/');
+});
+
 // Admin SPA Fallback
 app.get('/admin*', (req, res, next) => {
   const adminIndex = path.join(adminPublicDir, 'index.html');

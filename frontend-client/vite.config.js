@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [react()],
   build: {
     outDir: path.resolve(import.meta.dirname || __dirname, '../backend/public'),
-    emptyOutDir: true,
+    emptyOutDir: false,
   },
   server: {
     port: 5173,

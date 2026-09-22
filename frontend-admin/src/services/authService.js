@@ -20,7 +20,7 @@ export const authService = {
   logout: () => {
     localStorage.removeItem('wbs_admin_token');
     localStorage.removeItem('wbs_admin_user');
-    window.location.href = '/admin/login';
+    window.location.href = '/admin/#/login';
   },
 
   getCurrentUser: () => {

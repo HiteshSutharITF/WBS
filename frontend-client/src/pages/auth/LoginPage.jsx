@@ -4,12 +4,15 @@ import { authService } from '../../services/authService';
 import Input from '../../components/common/Input';
 import Button from '../../components/common/Button';
 import Alert from '../../components/common/Alert';
-import { MessageSquare, ShieldCheck, RefreshCw } from 'lucide-react';
+import { MessageSquare, ShieldCheck, RefreshCw, ArrowRight } from 'lucide-react';
 
 const LoginPage = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const ssoToken = searchParams.get('sso_token');
+  const ssoToken =
+    searchParams.get('sso_token') ||
+    new URLSearchParams(window.location.search).get('sso_token') ||
+    (window.location.hash.includes('?') ? new URLSearchParams(window.location.hash.split('?')[1]).get('sso_token') : null);
 
   const [formData, setFormData] = useState({ email: '', password: '' });
   const [errors, setErrors] = useState({});
@@ -66,7 +69,10 @@ const LoginPage = () => {
       const response = await authService.login(formData);
       const user = response.data?.user;
       if (user?.role === 'super_admin' || user?.role === 'support') {
-        navigate('/superadmin');
+        localStorage.setItem('wbs_admin_token', response.data.token);
+        localStorage.setItem('wbs_admin_user', JSON.stringify(user));
+        window.location.href = '/admin/#/';
+        return;
       } else {
         navigate('/');
       }
@@ -192,6 +198,15 @@ const LoginPage = () => {
             <div className="flex items-center justify-center gap-1.5 text-xs text-slate-500">
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>Client accounts are provisioned by ITFuturz Administrator.</span>
+            </div>
+            <div className="mt-3">
+              <a
+                href="/admin/#/login"
+                className="text-xs text-slate-500 hover:text-emerald-600 transition-colors inline-flex items-center gap-1 font-medium"
+              >
+                <span>Staff & Administrator Portal</span>
+                <ArrowRight className="w-3 h-3" />
+              </a>
             </div>
           </div>
         </div>

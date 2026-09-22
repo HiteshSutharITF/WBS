@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ShieldAlert, Lock, Mail } from 'lucide-react';
+import { ShieldAlert, Lock, Mail, ArrowLeft } from 'lucide-react';
 import { authService } from '../services/authService';
 import Input from '../components/Input';
 import Button from '../components/Button';
@@ -99,10 +99,19 @@ const LoginPage = () => {
             </Button>
           </form>
 
-          <div className="mt-6 pt-6 border-t border-slate-800 text-center">
+          <div className="mt-6 pt-6 border-t border-slate-800 text-center space-y-3">
             <p className="text-xs text-slate-500">
               Authorized ITFuturz Super Admin & Support personnel only. All access is logged to the tamper-proof audit trail (SA-09).
             </p>
+            <div>
+              <a
+                href="/#/"
+                className="text-xs text-slate-400 hover:text-amber-400 transition-colors inline-flex items-center gap-1.5"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span>Back to Client Business Portal</span>
+              </a>
+            </div>
           </div>
         </div>
       </div>

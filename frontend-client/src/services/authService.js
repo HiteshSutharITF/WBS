@@ -48,7 +48,7 @@ export const authService = {
     localStorage.removeItem('wbs_token');
     localStorage.removeItem('wbs_user');
     localStorage.removeItem('wbs_tenant');
-    window.location.href = '/login';
+    window.location.href = '/#/login';
   },
 
   getCurrentUser: () => {

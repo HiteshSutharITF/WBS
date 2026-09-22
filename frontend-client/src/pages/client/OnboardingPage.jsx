@@ -99,10 +99,13 @@ const OnboardingPage = () => {
   // 2. Handle Meta OAuth redirect with ?code=... in query params
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
-    const codeParam = searchParams.get('code');
+    const hashParams = window.location.hash.includes('?')
+      ? new URLSearchParams(window.location.hash.split('?')[1])
+      : new URLSearchParams();
+    const codeParam = searchParams.get('code') || hashParams.get('code');
     if (codeParam) {
       setConnecting(true);
-      window.history.replaceState({}, document.title, window.location.pathname);
+      window.history.replaceState({}, document.title, window.location.pathname + window.location.hash.split('?')[0]);
       tenantService
         .completeOnboarding({
           code: codeParam,
@@ -169,7 +172,7 @@ const OnboardingPage = () => {
 
     // If on HTTP or FB SDK unavailable, open direct Meta OAuth dialog in popup window
     try {
-      const redirectUri = `${window.location.origin}/onboarding`;
+      const redirectUri = `${window.location.origin}/#/onboarding`;
       const metaOAuthUrl = `https://www.facebook.com/v25.0/dialog/oauth?client_id=1075294524979498&config_id=4546265418941622&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}`;
       const popup = window.open(metaOAuthUrl, 'MetaEmbeddedSignup', 'width=650,height=750,scrollbars=yes');
 

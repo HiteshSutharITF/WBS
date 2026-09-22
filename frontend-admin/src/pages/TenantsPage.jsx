@@ -158,7 +158,7 @@ const TenantsPage = () => {
           ? `${window.location.protocol}//${window.location.hostname}:5173`
           : window.location.origin;
 
-      const ssoUrl = `${clientBaseUrl}/login?sso_token=${encodeURIComponent(token)}`;
+      const ssoUrl = `${clientBaseUrl}/#/login?sso_token=${encodeURIComponent(token)}`;
       window.open(ssoUrl, '_blank');
 
       setGlobalMessage({

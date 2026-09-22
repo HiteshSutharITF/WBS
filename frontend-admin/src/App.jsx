@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { authService } from './services/authService';
 
 import SuperAdminLayout from './components/SuperAdminLayout';
@@ -30,7 +30,7 @@ const PublicAdminRoute = ({ children }) => {
 
 function App() {
   return (
-    <BrowserRouter basename="/admin">
+    <HashRouter>
       <Routes>
         <Route
           path="/login"
@@ -57,7 +57,7 @@ function App() {
 
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
-    </BrowserRouter>
+    </HashRouter>
   );
 }
 
