@@ -5,6 +5,8 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { Server } = require('socket.io');
 
+const morgan = require('morgan');
+
 const env = require('./config/env');
 const connectDB = require('./config/db');
 const { initSocket } = require('./config/socket');
@@ -13,6 +15,9 @@ const errorHandler = require('./middleware/errorHandlerMiddleware');
 
 const app = express();
 const server = http.createServer(app);
+
+// HTTP Request Logging via Morgan
+app.use(morgan('[:date[iso]] :method :url :status :response-time ms - :res[content-length]'));
 
 // Trust reverse proxy (Nginx / Cloudflare on wbs.itfuturz.in)
 app.set('trust proxy', 1);

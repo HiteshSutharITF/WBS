@@ -61,5 +61,5 @@ module.exports = {
   META_TEST_PHONE_NUMBER: process.env.META_TEST_PHONE_NUMBER || '+1 555 672 2362',
   META_TEST_PHONE_NUMBER_ID: process.env.META_TEST_PHONE_NUMBER_ID || '1281664778368035',
   META_TEST_WABA_ID: process.env.META_TEST_WABA_ID || '1098394529543443',
-  ENABLE_MOCK_FALLBACK: process.env.ENABLE_MOCK_FALLBACK === 'true' || (isDev && lifecycle !== 'start')
+  ENABLE_MOCK_FALLBACK: process.env.ENABLE_MOCK_FALLBACK === 'true'
 };
