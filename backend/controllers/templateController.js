@@ -1,3 +1,4 @@
+const fs = require('fs');
 const ApiResponse = require('../utils/apiResponse');
 const { Template, WabaAccount, AuditLog } = require('../models/zindex');
 const cryptoUtils = require('../utils/cryptoUtils');
@@ -63,10 +64,16 @@ const createTemplate = async (req, res, next) => {
         }
         metaComponents.push(headerComp);
       } else if (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(header.format)) {
-        metaComponents.push({
+        const mediaComp = {
           type: 'HEADER',
           format: header.format
-        });
+        };
+        if (header.headerHandle) {
+          mediaComp.example = {
+            header_handle: [header.headerHandle]
+          };
+        }
+        metaComponents.push(mediaComp);
       }
     }
 
@@ -141,7 +148,14 @@ const createTemplate = async (req, res, next) => {
       category,
       language: language || 'en_US',
       status: metaRes?.status || 'PENDING', // Live Meta templates start in PENDING review
-      header: header || { format: 'NONE' },
+      header: {
+        format: header?.format || 'NONE',
+        text: header?.format === 'TEXT' ? (header.text || '') : '',
+        mediaUrl: header?.mediaUrl || '',
+        headerHandle: header?.headerHandle || '',
+        sampleFileName: header?.sampleFileName || '',
+        fileSize: header?.fileSize || 0
+      },
       body: {
         text: body.text.trim(),
         sampleVariables: (body.sampleVariables && body.sampleVariables.length > 0) ? body.sampleVariables : (req.body.sampleVariables || [])
@@ -238,9 +252,86 @@ const deleteTemplate = async (req, res, next) => {
   }
 };
 
+/**
+ * Upload sample media for template header and register with Meta Resumable Upload API
+ */
+const uploadSampleMedia = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return ApiResponse.badRequest(res, 'No media file was uploaded.');
+    }
+
+    const format = req.body.format || 'IMAGE'; // 'IMAGE' | 'DOCUMENT' | 'VIDEO'
+    const allowedFormats = {
+      IMAGE: ['image/jpeg', 'image/png'],
+      DOCUMENT: ['application/pdf'],
+      VIDEO: ['video/mp4', 'video/3gpp']
+    };
+
+    const maxSizes = {
+      IMAGE: 5 * 1024 * 1024,       // 5 MB per Meta Guidelines
+      DOCUMENT: 100 * 1024 * 1024,  // 100 MB per Meta Guidelines
+      VIDEO: 16 * 1024 * 1024       // 16 MB per Meta Guidelines
+    };
+
+    const expectedMimes = allowedFormats[format];
+    if (!expectedMimes || !expectedMimes.includes(req.file.mimetype)) {
+      return ApiResponse.badRequest(
+        res,
+        `Invalid file type for ${format}. Meta accepts: ${expectedMimes ? expectedMimes.join(', ') : 'valid media formats'}`
+      );
+    }
+
+    const maxSize = maxSizes[format] || (16 * 1024 * 1024);
+    if (req.file.size > maxSize) {
+      const maxMb = Math.round(maxSize / (1024 * 1024));
+      return ApiResponse.badRequest(res, `File exceeds Meta's maximum limit of ${maxMb}MB for ${format} headers.`);
+    }
+
+    // Retrieve WABA token & App ID for Meta Resumable Upload
+    const waba = await WabaAccount.findOne({ tenantId: req.tenantId });
+    if (!waba && !env.ENABLE_MOCK_FALLBACK) {
+      return ApiResponse.badRequest(res, 'Please connect your WhatsApp Business Account first.');
+    }
+
+    const token = waba ? cryptoUtils.decrypt(waba.encryptedToken) : 'mock_token';
+    const appId = env.META_APP_ID;
+
+    // Read uploaded binary file from disk
+    const fileBuffer = fs.readFileSync(req.file.path);
+
+    let headerHandle;
+    try {
+      headerHandle = await MetaGraphApi.uploadMediaSample({
+        appId,
+        token,
+        fileBuffer,
+        fileType: req.file.mimetype,
+        fileName: req.file.originalname
+      });
+    } catch (metaErr) {
+      return ApiResponse.badRequest(res, `Meta Resumable Upload error: ${metaErr.message}`);
+    }
+
+    const mediaUrl = `/uploads/templates/${req.file.filename}`;
+
+    return ApiResponse.success(res, 'Media sample uploaded and verified with Meta.', {
+      headerHandle,
+      mediaUrl,
+      sampleFileName: req.file.originalname,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      format
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   listTemplates,
   createTemplate,
   syncTemplates,
-  deleteTemplate
+  deleteTemplate,
+  uploadSampleMedia
 };

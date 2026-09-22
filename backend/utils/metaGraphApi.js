@@ -23,7 +23,11 @@ metaClient.interceptors.request.use(
       console.log(`Query Params:`, JSON.stringify(safeParams, null, 2));
     }
     if (config.data) {
-      console.log(`Request Body:`, JSON.stringify(config.data, null, 2));
+      if (Buffer.isBuffer(config.data)) {
+        console.log(`Request Body: [Binary Buffer: ${config.data.length} bytes]`);
+      } else {
+        console.log(`Request Body:`, JSON.stringify(config.data, null, 2));
+      }
     }
     console.log(`==================================================================\n`);
     return config;
@@ -380,6 +384,58 @@ class MetaGraphApi {
         headers: { Authorization: `Bearer ${businessToken}` }
       });
       return response.data;
+    } catch (error) {
+      const errData = error.response?.data?.error;
+      const errorMsg = errData ? `[Meta ${errData.code}] ${errData.message}` : error.message;
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
+   * Upload sample media for Message Templates via Meta Resumable Upload API
+   * Step 1: POST /v25.0/{appId}/uploads?file_length=...&file_type=...&file_name=...
+   * Step 2: POST /v25.0/{uploadId} with binary data and file_offset: 0
+   * Returns handle: string (h)
+   */
+  static async uploadMediaSample({ appId, token, fileBuffer, fileType, fileName }) {
+    if (!token || token.startsWith('mock_')) {
+      if (env.ENABLE_MOCK_FALLBACK) {
+        return `4:mock_handle_${Date.now()}`;
+      }
+      throw new Error('Meta API token is required to upload media sample.');
+    }
+
+    try {
+      // Step 1: Create an upload session
+      const sessionRes = await metaClient.post(`/${appId}/uploads`, null, {
+        params: {
+          file_length: fileBuffer.length,
+          file_type: fileType,
+          file_name: fileName,
+          access_token: token
+        }
+      });
+
+      const uploadId = sessionRes.data?.id;
+      if (!uploadId) {
+        throw new Error('Meta did not return an upload session ID.');
+      }
+
+      // Step 2: Upload file binary to the session
+      const uploadRes = await metaClient.post(`/${uploadId}`, fileBuffer, {
+        headers: {
+          Authorization: `OAuth ${token}`,
+          file_offset: 0,
+          'Content-Type': fileType || 'application/octet-stream'
+        }
+      });
+
+      const handle = uploadRes.data?.h;
+      if (!handle) {
+        throw new Error('Meta upload succeeded but did not return a media handle (h).');
+      }
+
+      return handle;
     } catch (error) {
       const errData = error.response?.data?.error;
       const errorMsg = errData ? `[Meta ${errData.code}] ${errData.message}` : error.message;

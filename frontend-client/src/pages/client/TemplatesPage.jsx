@@ -22,7 +22,13 @@ import {
   Bold,
   Italic,
   Strikethrough,
-  Code
+  Code,
+  Image as ImageIcon,
+  Video as VideoIcon,
+  File as FileIcon,
+  UploadCloud,
+  X as CloseIcon,
+  Play
 } from 'lucide-react';
 import { templateService } from '../../services/templateService';
 import { getSocket } from '../../utils/socket';
@@ -30,6 +36,7 @@ import Button from '../../components/common/Button';
 import Input from '../../components/common/Input';
 import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
+import Drawer from '../../components/common/Drawer';
 import Alert from '../../components/common/Alert';
 
 const LANGUAGES = [
@@ -172,6 +179,10 @@ const TemplatesPage = () => {
     headerType: 'NONE',
     headerText: '',
     headerSample: '',
+    headerHandle: '',
+    headerMediaUrl: '',
+    headerFileName: '',
+    headerFileSize: 0,
     bodyText: '',
     sampleVariables: [],
     footerText: '',
@@ -180,6 +191,12 @@ const TemplatesPage = () => {
 
   const [formErrors, setFormErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
+
+  // Media Header Upload States
+  const [mediaUploading, setMediaUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [mediaUploadError, setMediaUploadError] = useState('');
+  const fileInputRef = useRef(null);
 
   const nameRef = useRef(null);
   const bodyRef = useRef(null);
@@ -333,7 +350,15 @@ const TemplatesPage = () => {
       });
     }
 
-    // 7. Footer variable check
+    // 7. Header Media Sample requirement (Meta Rule)
+    if (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) && !templateForm.headerHandle) {
+      issues.push({
+        level: 'media_missing',
+        msg: `Meta requires an authentic sample ${templateForm.headerType.toLowerCase()} to be uploaded before submitting this template.`
+      });
+    }
+
+    // 8. Footer variable check
     if (/\{\{\d+\}\}/.test(templateForm.footerText)) {
       issues.push({
         level: 'error',
@@ -342,7 +367,7 @@ const TemplatesPage = () => {
     }
 
     return {
-      isValid: issues.filter((i) => i.level === 'error' || i.level === 'ratio_error' || i.level === 'sample_missing').length === 0,
+      isValid: issues.filter((i) => i.level === 'error' || i.level === 'ratio_error' || i.level === 'sample_missing' || i.level === 'media_missing').length === 0,
       issues
     };
   }, [templateForm, detectedVariables, uniqueVariables, staticText, staticWords]);
@@ -437,6 +462,99 @@ const TemplatesPage = () => {
     }));
   };
 
+  // Media sample file handling for Meta Resumable Upload
+  const handleMediaFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await processMediaFile(file);
+  };
+
+  const processMediaFile = async (file) => {
+    setMediaUploadError('');
+    const format = templateForm.headerType; // 'IMAGE' | 'DOCUMENT' | 'VIDEO'
+
+    // Meta Guideline Constraints
+    if (format === 'IMAGE') {
+      const allowed = ['image/jpeg', 'image/png', 'image/jpg'];
+      if (!allowed.includes(file.type)) {
+        setMediaUploadError('Meta only accepts JPEG or PNG images for templates.');
+        return;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        setMediaUploadError('Image size exceeds Meta 5MB limit.');
+        return;
+      }
+    } else if (format === 'DOCUMENT') {
+      if (file.type !== 'application/pdf') {
+        setMediaUploadError('Meta only accepts PDF documents for templates.');
+        return;
+      }
+      if (file.size > 100 * 1024 * 1024) {
+        setMediaUploadError('Document size exceeds Meta 100MB limit.');
+        return;
+      }
+    } else if (format === 'VIDEO') {
+      const allowed = ['video/mp4', 'video/3gpp'];
+      if (!allowed.includes(file.type)) {
+        setMediaUploadError('Meta only accepts MP4 or 3GP videos for templates.');
+        return;
+      }
+      if (file.size > 16 * 1024 * 1024) {
+        setMediaUploadError('Video size exceeds Meta 16MB limit.');
+        return;
+      }
+    }
+
+    setMediaUploading(true);
+    setUploadProgress(0);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('format', format);
+
+      const res = await templateService.uploadMediaSample(formData, (percent) => {
+        setUploadProgress(percent);
+      });
+
+      const { headerHandle, mediaUrl, sampleFileName, fileSize } = res.data;
+      setTemplateForm((prev) => ({
+        ...prev,
+        headerHandle,
+        headerMediaUrl: mediaUrl,
+        headerFileName: sampleFileName,
+        headerFileSize: fileSize
+      }));
+      setFormErrors((prev) => {
+        const copy = { ...prev };
+        delete copy.header;
+        return copy;
+      });
+    } catch (err) {
+      setMediaUploadError(err.message || 'Failed to upload media sample to Meta.');
+    } finally {
+      setMediaUploading(false);
+      setUploadProgress(0);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const removeMediaSample = () => {
+    setTemplateForm((prev) => ({
+      ...prev,
+      headerHandle: '',
+      headerMediaUrl: '',
+      headerFileName: '',
+      headerFileSize: 0
+    }));
+    setMediaUploadError('');
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const validateForm = () => {
     const errs = {};
     if (!templateForm.name.trim()) {
@@ -483,6 +601,10 @@ const TemplatesPage = () => {
       }
       if (templateForm.headerText.includes('{{1}}') && !templateForm.headerSample.trim()) {
         errs.headerSample = 'Sample value for header variable {{1}} is required.';
+      }
+    } else if (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType)) {
+      if (!templateForm.headerHandle) {
+        errs.header = `Meta requires a sample ${templateForm.headerType.toLowerCase()} file before submitting.`;
       }
     }
 
@@ -538,7 +660,11 @@ const TemplatesPage = () => {
         header: {
           format: templateForm.headerType,
           text: templateForm.headerType === 'TEXT' ? templateForm.headerText.trim() : undefined,
-          sampleVariable: templateForm.headerSample ? templateForm.headerSample.trim() : undefined
+          sampleVariable: templateForm.headerSample ? templateForm.headerSample.trim() : undefined,
+          headerHandle: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) ? templateForm.headerHandle : undefined,
+          mediaUrl: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) ? templateForm.headerMediaUrl : undefined,
+          sampleFileName: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) ? templateForm.headerFileName : undefined,
+          fileSize: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) ? templateForm.headerFileSize : undefined
         },
         body: {
           text: templateForm.bodyText.trim(),
@@ -564,11 +690,16 @@ const TemplatesPage = () => {
         headerType: 'NONE',
         headerText: '',
         headerSample: '',
+        headerHandle: '',
+        headerMediaUrl: '',
+        headerFileName: '',
+        headerFileSize: 0,
         bodyText: '',
         sampleVariables: [],
         footerText: '',
         buttons: []
       });
+      setMediaUploadError('');
       fetchTemplates();
     } catch (err) {
       alert(err.message || 'Failed to submit template to Meta.');
@@ -699,9 +830,21 @@ const TemplatesPage = () => {
                     </p>
                   )}
                   {['IMAGE', 'DOCUMENT', 'VIDEO'].includes(tmpl.header?.format) && (
-                    <div className="h-16 bg-slate-200/80 rounded-lg flex items-center justify-center text-slate-500 text-[11px] font-medium border border-slate-300/50">
-                      [{tmpl.header.format} Header]
-                    </div>
+                    tmpl.header?.format === 'IMAGE' && tmpl.header?.mediaUrl ? (
+                      <div className="relative rounded-lg overflow-hidden max-h-32 mb-2 border border-slate-300/60 bg-slate-100">
+                        <img
+                          src={tmpl.header.mediaUrl}
+                          alt={tmpl.name}
+                          className="w-full h-auto max-h-32 object-cover"
+                        />
+                      </div>
+                    ) : (
+                      <div className="h-14 bg-slate-200/80 rounded-lg flex items-center justify-center text-slate-700 text-xs font-semibold gap-1.5 border border-slate-300/50 mb-2">
+                        {tmpl.header?.format === 'IMAGE' && <><ImageIcon className="w-4 h-4 text-blue-600" /> Image Header</>}
+                        {tmpl.header?.format === 'DOCUMENT' && <><FileIcon className="w-4 h-4 text-rose-600" /> Document (PDF) Header</>}
+                        {tmpl.header?.format === 'VIDEO' && <><VideoIcon className="w-4 h-4 text-purple-600" /> Video Header</>}
+                      </div>
+                    )
                   )}
 
                   <p className="text-slate-800 whitespace-pre-wrap leading-relaxed">
@@ -761,19 +904,30 @@ const TemplatesPage = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* CREATE TEMPLATE MODAL - 100% META GUIDELINES COMPLIANT WITH LIVE PREVIEW */}
+      {/* CREATE TEMPLATE DRAWER - 100% META GUIDELINES COMPLIANT WITH LIVE PREVIEW */}
       {/* ========================================================================= */}
-      <Modal
+      <Drawer
         isOpen={isCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         title="Create & Submit WhatsApp Template to Meta"
-        size="xl"
+        subtitle="Configure your message template and verify with Meta Cloud API guidelines before submission"
+        badge={
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+            <CheckCircle2 className="w-3.5 h-3.5" /> Meta Cloud API V25.0
+          </span>
+        }
+        size="2xl"
         footer={
-          <div className="flex items-center justify-between w-full">
-            <div className="text-xs text-slate-500">
-              Templates are submitted directly to Meta Graph API for automated review.
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 w-full">
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span className={`w-2.5 h-2.5 rounded-full ${compliance.isValid ? 'bg-emerald-500 ring-4 ring-emerald-100' : 'bg-amber-500 ring-4 ring-amber-100'}`} />
+              <span className="font-medium text-slate-600">
+                {compliance.isValid
+                  ? 'All Meta Review Guidelines Passed • Ready to Submit'
+                  : 'Please resolve required fields in the Meta Review Checklist'}
+              </span>
             </div>
-            <div className="flex gap-2.5">
+            <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
               <Button variant="secondary" onClick={() => setIsCreateModalOpen(false)}>
                 Cancel
               </Button>
@@ -784,7 +938,7 @@ const TemplatesPage = () => {
                 disabled={!compliance.isValid}
                 icon={Sparkles}
               >
-                Submit to Meta
+                Submit to Meta for Approval
               </Button>
             </div>
           </div>
@@ -881,14 +1035,34 @@ const TemplatesPage = () => {
                   <label className="block text-xs font-medium text-slate-600">Header Format</label>
                   <select
                     value={templateForm.headerType}
-                    onChange={(e) => setTemplateForm({ ...templateForm, headerType: e.target.value })}
+                    onChange={(e) => {
+                      const newType = e.target.value;
+                      setTemplateForm((prev) => ({
+                        ...prev,
+                        headerType: newType,
+                        headerText: newType === 'TEXT' ? prev.headerText : '',
+                        headerSample: newType === 'TEXT' ? prev.headerSample : '',
+                        headerHandle: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(newType) ? prev.headerHandle : '',
+                        headerMediaUrl: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(newType) ? prev.headerMediaUrl : '',
+                        headerFileName: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(newType) ? prev.headerFileName : '',
+                        headerFileSize: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(newType) ? prev.headerFileSize : 0
+                      }));
+                      setMediaUploadError('');
+                      if (formErrors.header) {
+                        setFormErrors((prev) => {
+                          const copy = { ...prev };
+                          delete copy.header;
+                          return copy;
+                        });
+                      }
+                    }}
                     className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl outline-none"
                   >
                     <option value="NONE">None (No Header)</option>
                     <option value="TEXT">Text Headline</option>
-                    <option value="IMAGE">Image</option>
-                    <option value="DOCUMENT">Document / PDF</option>
-                    <option value="VIDEO">Video</option>
+                    <option value="IMAGE">Image Header (JPEG, PNG)</option>
+                    <option value="DOCUMENT">Document / PDF Header</option>
+                    <option value="VIDEO">Video Header (MP4, 3GP)</option>
                   </select>
                 </div>
 
@@ -926,6 +1100,148 @@ const TemplatesPage = () => {
                   />
                   <p className="text-[10px] text-slate-500">
                     Meta requires a sample value for the variable in the header.
+                  </p>
+                </div>
+              )}
+
+              {/* Media Sample Upload Area for IMAGE, DOCUMENT, VIDEO */}
+              {['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) && (
+                <div className="space-y-2 pt-2 border-t border-slate-200/70 mt-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                      {templateForm.headerType === 'IMAGE' && <ImageIcon className="w-3.5 h-3.5 text-blue-600" />}
+                      {templateForm.headerType === 'DOCUMENT' && <FileIcon className="w-3.5 h-3.5 text-rose-600" />}
+                      {templateForm.headerType === 'VIDEO' && <VideoIcon className="w-3.5 h-3.5 text-purple-600" />}
+                      <span>Sample {templateForm.headerType === 'IMAGE' ? 'Image' : templateForm.headerType === 'DOCUMENT' ? 'PDF Document' : 'Video'} File</span>
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+                      Required by Meta
+                    </span>
+                  </div>
+
+                  {/* Hidden native file input */}
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleMediaFileChange}
+                    accept={
+                      templateForm.headerType === 'IMAGE'
+                        ? 'image/jpeg,image/png,image/jpg'
+                        : templateForm.headerType === 'DOCUMENT'
+                        ? 'application/pdf'
+                        : 'video/mp4,video/3gpp'
+                    }
+                    className="hidden"
+                  />
+
+                  {!templateForm.headerHandle ? (
+                    /* Upload Dropzone */
+                    <div
+                      onClick={() => !mediaUploading && fileInputRef.current?.click()}
+                      className={`p-4 border-2 border-dashed rounded-xl flex flex-col items-center justify-center text-center cursor-pointer transition-all ${
+                        formErrors.header || mediaUploadError
+                          ? 'border-red-300 bg-red-50/40 hover:bg-red-50/70'
+                          : 'border-slate-300 hover:border-blue-400 bg-white hover:bg-blue-50/20'
+                      } ${mediaUploading ? 'pointer-events-none opacity-80' : ''}`}
+                    >
+                      {mediaUploading ? (
+                        <div className="py-2 flex flex-col items-center gap-2">
+                          <RefreshCw className="w-6 h-6 text-blue-600 animate-spin" />
+                          <div className="text-xs font-semibold text-slate-700">
+                            Uploading to Meta Resumable API... {uploadProgress > 0 && `${uploadProgress}%`}
+                          </div>
+                          <div className="w-44 bg-slate-200 h-1.5 rounded-full overflow-hidden">
+                            <div
+                              className="bg-blue-600 h-full transition-all duration-200 rounded-full"
+                              style={{ width: `${uploadProgress || 30}%` }}
+                            />
+                          </div>
+                          <p className="text-[10px] text-slate-400">Verifying file and generating header handle with Meta Cloud API</p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 mb-2">
+                            <UploadCloud className="w-5 h-5 text-blue-600" />
+                          </div>
+                          <p className="text-xs font-semibold text-slate-800">
+                            Click to browse or drag & drop sample {templateForm.headerType.toLowerCase()}
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            {templateForm.headerType === 'IMAGE' && 'JPG, JPEG, or PNG • Maximum 5 MB'}
+                            {templateForm.headerType === 'DOCUMENT' && 'PDF Document • Maximum 100 MB'}
+                            {templateForm.headerType === 'VIDEO' && 'MP4 or 3GP Video • Maximum 16 MB'}
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  ) : (
+                    /* Uploaded File Card */
+                    <div className="p-3 bg-white border border-emerald-300 rounded-xl shadow-2xs flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {templateForm.headerType === 'IMAGE' && templateForm.headerMediaUrl ? (
+                          <img
+                            src={templateForm.headerMediaUrl}
+                            alt="Sample preview"
+                            className="w-12 h-12 object-cover rounded-lg border border-slate-200 shrink-0"
+                          />
+                        ) : templateForm.headerType === 'DOCUMENT' ? (
+                          <div className="w-12 h-12 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shrink-0">
+                            <FileIcon className="w-6 h-6" />
+                          </div>
+                        ) : (
+                          <div className="w-12 h-12 rounded-lg bg-purple-50 border border-purple-200 flex items-center justify-center text-purple-600 shrink-0">
+                            <VideoIcon className="w-6 h-6" />
+                          </div>
+                        )}
+
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <p className="text-xs font-bold text-slate-900 truncate">
+                              {templateForm.headerFileName || 'sample_media'}
+                            </p>
+                            <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded-full shrink-0">
+                              <Check className="w-3 h-3 text-emerald-600" /> Meta Verified
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-400 mt-0.5 font-mono">
+                            {(templateForm.headerFileSize / 1024).toFixed(1)} KB • Handle: {templateForm.headerHandle.slice(0, 18)}...
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          className="px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200"
+                        >
+                          Change
+                        </button>
+                        <button
+                          type="button"
+                          onClick={removeMediaSample}
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Remove sample file"
+                        >
+                          <CloseIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {mediaUploadError && (
+                    <p className="text-xs text-red-600 flex items-center gap-1 mt-1">
+                      <XCircle className="w-3.5 h-3.5 shrink-0" /> {mediaUploadError}
+                    </p>
+                  )}
+                  {formErrors.header && (
+                    <p className="text-xs text-red-600 flex items-center gap-1 mt-1">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> {formErrors.header}
+                    </p>
+                  )}
+                  <p className="text-[10px] text-slate-400">
+                    Meta automated and manual reviewers require this sample to verify compliance before approving your template.
                   </p>
                 </div>
               )}
@@ -1253,11 +1569,78 @@ const TemplatesPage = () => {
                         {templateForm.headerText.replace('{{1}}', templateForm.headerSample || '{{1}}')}
                       </div>
                     )}
-                    {['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) && (
-                      <div className="h-28 bg-slate-100 rounded-xl flex flex-col items-center justify-center text-slate-400 text-xs gap-1 border border-slate-200">
-                        <FileText className="w-6 h-6 text-slate-300" />
-                        <span className="text-[10px] uppercase font-semibold">[{templateForm.headerType} Media Header]</span>
-                      </div>
+
+                    {templateForm.headerType === 'IMAGE' && (
+                      templateForm.headerMediaUrl ? (
+                        <div className="relative rounded-xl overflow-hidden mb-1.5 border border-black/5 bg-slate-100 max-h-44">
+                          <img
+                            src={templateForm.headerMediaUrl}
+                            alt="Header sample preview"
+                            className="w-full h-auto max-h-44 object-cover"
+                          />
+                          <div className="absolute top-1.5 right-1.5 bg-black/60 backdrop-blur-xs text-white text-[9px] px-1.5 py-0.5 rounded font-medium">
+                            Sample Image
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => fileInputRef.current?.click()}
+                          className="h-24 bg-slate-100 hover:bg-slate-200/80 transition-colors rounded-xl flex flex-col items-center justify-center text-slate-400 text-xs gap-1 border border-dashed border-slate-300 cursor-pointer mb-1.5"
+                        >
+                          <ImageIcon className="w-5 h-5 text-slate-400" />
+                          <span className="text-[11px] font-medium text-slate-600">Upload Image Sample</span>
+                          <span className="text-[9px] text-slate-400">JPG, PNG (Max 5MB)</span>
+                        </div>
+                      )
+                    )}
+
+                    {templateForm.headerType === 'DOCUMENT' && (
+                      templateForm.headerFileName ? (
+                        <div className="bg-[#f0f2f5] p-2 rounded-xl flex items-center gap-2 border border-slate-200/80 mb-1.5">
+                          <div className="w-8 h-8 rounded-lg bg-rose-500 flex items-center justify-center text-white shrink-0 shadow-2xs">
+                            <FileIcon className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-bold text-slate-800 truncate">
+                              {templateForm.headerFileName}
+                            </p>
+                            <p className="text-[9px] text-slate-500">
+                              {(templateForm.headerFileSize / 1024).toFixed(0)} KB • PDF Document
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => fileInputRef.current?.click()}
+                          className="h-20 bg-slate-100 hover:bg-slate-200/80 transition-colors rounded-xl flex flex-col items-center justify-center text-slate-400 text-xs gap-1 border border-dashed border-slate-300 cursor-pointer mb-1.5"
+                        >
+                          <FileIcon className="w-5 h-5 text-slate-400" />
+                          <span className="text-[11px] font-medium text-slate-600">Upload PDF Sample</span>
+                          <span className="text-[9px] text-slate-400">PDF (Max 100MB)</span>
+                        </div>
+                      )
+                    )}
+
+                    {templateForm.headerType === 'VIDEO' && (
+                      templateForm.headerFileName ? (
+                        <div className="relative rounded-xl overflow-hidden mb-1.5 bg-slate-900 h-28 flex items-center justify-center">
+                          <div className="w-9 h-9 rounded-full bg-white/30 backdrop-blur-xs flex items-center justify-center text-white shadow-md border border-white/40">
+                            <Play className="w-4 h-4 fill-white translate-x-0.5" />
+                          </div>
+                          <div className="absolute bottom-1.5 left-2 text-[9px] text-white/90 font-medium truncate max-w-[80%]">
+                            {templateForm.headerFileName}
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          onClick={() => fileInputRef.current?.click()}
+                          className="h-24 bg-slate-100 hover:bg-slate-200/80 transition-colors rounded-xl flex flex-col items-center justify-center text-slate-400 text-xs gap-1 border border-dashed border-slate-300 cursor-pointer mb-1.5"
+                        >
+                          <VideoIcon className="w-5 h-5 text-slate-400" />
+                          <span className="text-[11px] font-medium text-slate-600">Upload Video Sample</span>
+                          <span className="text-[9px] text-slate-400">MP4, 3GP (Max 16MB)</span>
+                        </div>
+                      )
                     )}
 
                     {/* Message Body with live sample variable substitution */}
@@ -1320,6 +1703,18 @@ const TemplatesPage = () => {
                   )}
                   <span>Valid template name (lowercase and underscores)</span>
                 </li>
+                {['IMAGE', 'DOCUMENT', 'VIDEO'].includes(templateForm.headerType) && (
+                  <li className="flex items-center gap-2">
+                    {templateForm.headerHandle ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                    )}
+                    <span>
+                      {templateForm.headerType} sample file uploaded to Meta ({templateForm.headerHandle ? 'Ready' : 'Required'})
+                    </span>
+                  </li>
+                )}
                 <li className="flex items-center gap-2">
                   {uniqueVariables.length === 0 || !compliance.issues.some((i) => i.level === 'ratio_error') ? (
                     <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
@@ -1348,7 +1743,7 @@ const TemplatesPage = () => {
             </div>
           </div>
         </div>
-      </Modal>
+      </Drawer>
     </div>
   );
 };

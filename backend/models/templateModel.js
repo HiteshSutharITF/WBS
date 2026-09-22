@@ -46,7 +46,10 @@ const templateSchema = new mongoose.Schema(
         default: 'NONE'
       },
       text: { type: String, default: '' },
-      mediaUrl: { type: String, default: '' }
+      mediaUrl: { type: String, default: '' },
+      headerHandle: { type: String, default: '' },
+      sampleFileName: { type: String, default: '' },
+      fileSize: { type: Number, default: 0 }
     },
     body: {
       text: {

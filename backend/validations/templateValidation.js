@@ -31,6 +31,10 @@ const validateTemplateCreate = (data) => {
           errors.header = 'Header variable must be {{1}}.';
         }
       }
+    } else if (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(data.header.format)) {
+      if (!data.header.headerHandle && !data.header.mediaUrl) {
+        errors.header = `Meta guidelines require a sample ${data.header.format.toLowerCase()} file for ${data.header.format} headers. Please upload a sample file before submitting.`;
+      }
     }
   }
 
