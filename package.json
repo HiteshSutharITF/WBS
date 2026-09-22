@@ -11,6 +11,9 @@
     "build:client": "npm --prefix frontend-client run build",
     "build:admin": "npm --prefix frontend-admin run build",
     "build": "npm run build:client && npm run build:admin",
-    "seed": "npm --prefix backend run seed"
+    "seed": "npm --prefix backend run seed:live",
+    "seed:live": "npm --prefix backend run seed:live",
+    "seed:clean": "npm --prefix backend run seed:clean",
+    "seed:demo": "npm --prefix backend run seed:demo"
   }
 }

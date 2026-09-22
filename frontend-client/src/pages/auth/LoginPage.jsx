@@ -155,35 +155,37 @@ const LoginPage = () => {
             </Button>
           </form>
 
-          {/* Quick Demo Logins */}
-          <div className="mt-6 pt-6 border-t border-slate-100">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 text-center">
-              Quick Demo Accounts
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => handleFillDemo('admin')}
-                className="px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors truncate"
-              >
-                Client Admin
-              </button>
-              <button
-                type="button"
-                onClick={() => handleFillDemo('agent')}
-                className="px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors truncate"
-              >
-                Client Agent
-              </button>
-              <button
-                type="button"
-                onClick={() => handleFillDemo('superadmin')}
-                className="px-2 py-1.5 text-xs font-medium text-amber-800 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors truncate"
-              >
-                Super Admin
-              </button>
+          {/* Quick Demo Logins (Development only) */}
+          {import.meta.env.DEV && (
+            <div className="mt-6 pt-6 border-t border-slate-100">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 text-center">
+                Quick Demo Accounts (Dev Only)
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleFillDemo('admin')}
+                  className="px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors truncate"
+                >
+                  Client Admin
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleFillDemo('agent')}
+                  className="px-2 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors truncate"
+                >
+                  Client Agent
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleFillDemo('superadmin')}
+                  className="px-2 py-1.5 text-xs font-medium text-amber-800 bg-amber-100 hover:bg-amber-200 rounded-lg transition-colors truncate"
+                >
+                  Super Admin
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Registration Notice per user requirement (no direct public register) */}
           <div className="mt-6 pt-4 border-t border-slate-100 text-center">

@@ -85,15 +85,31 @@ whatshaap assistent/
 
 ---
 
-## 🔑 Pre-Seeded Credentials
+## 🔑 Database Seeding & Production Accounts
 
-Run `npm run seed` anytime to populate initial demo accounts:
+### 1. Live Production Seeding (Clean — No Fake Data)
+To initialize the production database on **`wbs.itfuturz.in`**:
+```bash
+# Provision initial Super Administrator (clean - 0 fake tenants, 0 mock tokens)
+npm run seed:live
+```
+Or to perform a clean database wipe and initialize only the Super Administrator:
+```bash
+npm run seed:clean
+```
 
 | Role | Email | Password | Access / Panel |
 |---|---|---|---|
-| **Super Admin** | `superadmin@itfuturz.com` | `SuperAdmin@123` | Super Admin Console (`http://localhost:5000/admin/`) |
-| **Client Admin** | `admin@acmeretail.com` | `Admin@123` | Client Business Panel (`http://localhost:5000/`) |
-| **Client Agent** | `agent@acmeretail.com` | `Agent@123` | Agent Inbox (`http://localhost:5000/inbox`) |
+| **Super Admin** | `superadmin@itfuturz.com` | `SuperAdmin@123` | Super Admin Console (`https://wbs.itfuturz.in/admin/`) |
+
+> [!NOTE]
+> In live production, all client business accounts are provisioned by ITFuturz staff directly inside the Super Admin Console (`+ Create Client Account`).
+
+### 2. Offline Demo Seeding (Local Testing Only)
+To seed mock Acme Retail data for local development:
+```bash
+npm run seed:demo
+```
 
 ---
 
@@ -125,3 +141,57 @@ npm run dev:admin
 npm run build
 ```
 *(Compiles `frontend-client` into `backend/public/` and `frontend-admin` into `backend/public/admin/`)*
+
+---
+
+## 🌐 Live Production Deployment (`wbs.itfuturz.in`)
+
+| Endpoint | Production URL |
+|---|---|
+| **Client Portal** | `https://wbs.itfuturz.in/` |
+| **Super Admin Console** | `https://wbs.itfuturz.in/admin/` |
+| **Backend API Health Check** | `https://wbs.itfuturz.in/api/health` |
+| **WhatsApp Webhook Callback URL** | `https://wbs.itfuturz.in/webhook` |
+| **Meta Embedded Signup Redirect URI** | `https://wbs.itfuturz.in/onboarding` |
+
+### 1. Nginx Reverse Proxy Setup
+Use the provided configuration file at `deployment/nginx-wbs.itfuturz.in.conf`:
+```bash
+# Copy nginx config to sites-available
+sudo cp deployment/nginx-wbs.itfuturz.in.conf /etc/nginx/sites-available/wbs.itfuturz.in.conf
+sudo ln -s /etc/nginx/sites-available/wbs.itfuturz.in.conf /etc/nginx/sites-enabled/
+
+# Obtain SSL Certificate
+sudo certbot --nginx -d wbs.itfuturz.in
+
+# Test and reload Nginx
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### 2. PM2 Production Process Management
+```bash
+# Start with PM2
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup
+```
+
+### 3. Meta Developer Dashboard Configuration Checklist (`App ID: 1075294524979498`)
+In [developers.facebook.com](https://developers.facebook.com/apps/1075294524979498/):
+1. **App settings → Basic**:
+   - **App Domains**: `wbs.itfuturz.in`, `itfuturz.in`
+   - **Privacy Policy URL**: `https://itfuturz.in/support/privacy-policy.html`
+   - **Terms of Service URL**: `https://itfuturz.in/support/terms.html`
+   - **User data deletion**: `https://itfuturz.in/support/data-deletion.html`
+   - **Website Platform**: Add `https://wbs.itfuturz.in/`
+2. **WhatsApp → Configuration**:
+   - **Callback URL**: `https://wbs.itfuturz.in/webhook`
+   - **Verify Token**: `wbs_webhook_verify_token_2026` (from `.env`)
+   - **Webhook Fields**: Subscribe to `messages`, `message_template_status_update`, `phone_number_quality_update`
+3. **Facebook Login for Business → Settings**:
+   - **Valid OAuth Redirect URIs**: `https://wbs.itfuturz.in/onboarding`, `https://wbs.itfuturz.in/`
+   - **Allowed Domains for JavaScript SDK**: `https://wbs.itfuturz.in`
+4. **Configuration ID `4546265418941622` (Embedded Signup)**:
+   - Ensure `https://wbs.itfuturz.in` is registered as the originating host.
+

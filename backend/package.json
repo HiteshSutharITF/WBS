@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node app.js",
     "dev": "node app.js",
-    "seed": "node utils/seedData.js"
+    "seed": "node utils/seedLive.js",
+    "seed:live": "node utils/seedLive.js",
+    "seed:clean": "node utils/seedLive.js --clean",
+    "seed:demo": "node utils/seedData.js"
   },
   "dependencies": {
     "axios": "^1.7.9",
