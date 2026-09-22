@@ -3,6 +3,7 @@ const { Template, WabaAccount, AuditLog } = require('../models/zindex');
 const cryptoUtils = require('../utils/cryptoUtils');
 const MetaGraphApi = require('../utils/metaGraphApi');
 const env = require('../config/env');
+const { validateTemplateCreate } = require('../validations/templateValidation');
 
 const listTemplates = async (req, res, next) => {
   try {
@@ -23,8 +24,14 @@ const createTemplate = async (req, res, next) => {
   try {
     const { name, category, language, header, body, footer, buttons } = req.body;
 
+    // 1. Strict Meta Guidelines Validation
+    const validation = validateTemplateCreate(req.body);
+    if (!validation.isValid) {
+      return ApiResponse.badRequest(res, validation.message, validation.errors);
+    }
+
     // Check if template with this name already exists for tenant
-    const existing = await Template.findOne({ tenantId: req.tenantId, name: name.toLowerCase() });
+    const existing = await Template.findOne({ tenantId: req.tenantId, name: name.toLowerCase().trim() });
     if (existing) {
       return ApiResponse.badRequest(res, `A template named "${name}" already exists.`);
     }
@@ -37,17 +44,24 @@ const createTemplate = async (req, res, next) => {
     const token = waba ? cryptoUtils.decrypt(waba.encryptedToken) : 'mock_token';
     const wabaId = waba?.wabaId || env.META_TEST_WABA_ID;
 
-    // Build Meta Cloud API component format
+    // 2. Build Meta Cloud API component format with required example objects
     const metaComponents = [];
 
     // Header
     if (header && header.format && header.format !== 'NONE') {
       if (header.format === 'TEXT' && header.text) {
-        metaComponents.push({
+        const headerComp = {
           type: 'HEADER',
           format: 'TEXT',
-          text: header.text
-        });
+          text: header.text.trim()
+        };
+        const headerVars = header.text.match(/\{\{(\d+)\}\}/g);
+        if (headerVars && headerVars.length > 0) {
+          headerComp.example = {
+            header_text: [header.sampleVariable || 'Sample Header']
+          };
+        }
+        metaComponents.push(headerComp);
       } else if (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(header.format)) {
         metaComponents.push({
           type: 'HEADER',
@@ -56,17 +70,30 @@ const createTemplate = async (req, res, next) => {
       }
     }
 
-    // Body
-    metaComponents.push({
+    // Body (with Meta required example object for variables)
+    const bodyComp = {
       type: 'BODY',
-      text: body.text
-    });
+      text: body.text.trim()
+    };
+    const bodyVars = body.text.match(/\{\{(\d+)\}\}/g);
+    if (bodyVars && bodyVars.length > 0) {
+      const rawSamples = (body.sampleVariables && Array.isArray(body.sampleVariables) && body.sampleVariables.length > 0)
+        ? body.sampleVariables
+        : (req.body.sampleVariables && Array.isArray(req.body.sampleVariables) && req.body.sampleVariables.length > 0)
+        ? req.body.sampleVariables
+        : [];
+      const sampleList = bodyVars.map((_, idx) => (rawSamples[idx] && String(rawSamples[idx]).trim()) ? String(rawSamples[idx]).trim() : `Sample ${idx + 1}`);
+      bodyComp.example = {
+        body_text: [sampleList]
+      };
+    }
+    metaComponents.push(bodyComp);
 
-    // Footer
-    if (footer && footer.text) {
+    // Footer (Meta forbids variables in footer)
+    if (footer && footer.text && footer.text.trim()) {
       metaComponents.push({
         type: 'FOOTER',
-        text: footer.text
+        text: footer.text.trim()
       });
     }
 
@@ -74,13 +101,17 @@ const createTemplate = async (req, res, next) => {
     if (buttons && Array.isArray(buttons) && buttons.length > 0) {
       const metaButtons = buttons.map((btn) => {
         if (btn.type === 'QUICK_REPLY') {
-          return { type: 'QUICK_REPLY', text: btn.text };
+          return { type: 'QUICK_REPLY', text: btn.text.trim() };
         } else if (btn.type === 'URL') {
-          return { type: 'URL', text: btn.text, url: btn.value };
+          const btnObj = { type: 'URL', text: btn.text.trim(), url: btn.value.trim() };
+          if (btn.value.includes('{{1}}')) {
+            btnObj.example = [btn.sampleUrl || btn.value.replace('{{1}}', '12345')];
+          }
+          return btnObj;
         } else if (btn.type === 'PHONE_NUMBER') {
-          return { type: 'PHONE_NUMBER', text: btn.text, phone_number: btn.value };
+          return { type: 'PHONE_NUMBER', text: btn.text.trim(), phone_number: btn.value.trim() };
         }
-        return { type: 'QUICK_REPLY', text: btn.text };
+        return { type: 'QUICK_REPLY', text: btn.text.trim() };
       });
 
       metaComponents.push({
@@ -106,12 +137,15 @@ const createTemplate = async (req, res, next) => {
     const template = await Template.create({
       tenantId: req.tenantId,
       metaTemplateId: metaRes?.id || null,
-      name: name.toLowerCase(),
+      name: name.toLowerCase().trim(),
       category,
       language: language || 'en_US',
       status: metaRes?.status || 'PENDING', // Live Meta templates start in PENDING review
       header: header || { format: 'NONE' },
-      body,
+      body: {
+        text: body.text.trim(),
+        sampleVariables: (body.sampleVariables && body.sampleVariables.length > 0) ? body.sampleVariables : (req.body.sampleVariables || [])
+      },
       footer: footer || { text: '' },
       buttons: buttons || []
     });
