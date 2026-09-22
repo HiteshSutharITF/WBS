@@ -181,7 +181,10 @@ const startBroadcast = async (req, res, next) => {
             conversation = await Conversation.create({
               tenantId: broadcast.tenantId,
               contactId: item.contactId,
-              status: 'open'
+              status: 'open',
+              lastCustomerMessageAt: null,
+              lastMessageAt: new Date(),
+              lastMessageText: `[Broadcast] ${broadcast.name}`
             });
           }
 

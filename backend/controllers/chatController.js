@@ -2,6 +2,56 @@ const ApiResponse = require('../utils/apiResponse');
 const { Conversation, Message, Contact } = require('../models/zindex');
 const socket = require('../config/socket');
 
+// Precise Meta 24-hour customer service window calculator
+const compute24HourWindow = (conversation, now = Date.now()) => {
+  // A 24-hour service window is ONLY open if:
+  // 1. The customer sent an inbound message (lastCustomerMessageAt is a valid Date)
+  // 2. The time elapsed since that message is <= 24 hours
+  if (!conversation.lastCustomerMessageAt) {
+    return {
+      hasCustomerMessaged: false,
+      isWindowOpen: false,
+      windowExpiresInHours: 0,
+      windowExpiresInMinutes: 0,
+      sessionStatus: 'NO_INBOUND_SESSION' // Customer has never messaged; template required
+    };
+  }
+
+  const lastCustTime = new Date(conversation.lastCustomerMessageAt).getTime();
+  if (isNaN(lastCustTime)) {
+    return {
+      hasCustomerMessaged: false,
+      isWindowOpen: false,
+      windowExpiresInHours: 0,
+      windowExpiresInMinutes: 0,
+      sessionStatus: 'NO_INBOUND_SESSION'
+    };
+  }
+
+  const elapsedMs = now - lastCustTime;
+  const elapsedHours = elapsedMs / (1000 * 60 * 60);
+
+  if (elapsedHours >= 0 && elapsedHours <= 24) {
+    const remainingHours = Math.max(0, 24 - elapsedHours);
+    const remainingMinutes = Math.max(0, Math.round((24 - elapsedHours) * 60));
+    return {
+      hasCustomerMessaged: true,
+      isWindowOpen: true,
+      windowExpiresInHours: remainingHours,
+      windowExpiresInMinutes: remainingMinutes,
+      sessionStatus: 'ACTIVE'
+    };
+  }
+
+  return {
+    hasCustomerMessaged: true,
+    isWindowOpen: false,
+    windowExpiresInHours: 0,
+    windowExpiresInMinutes: 0,
+    sessionStatus: 'EXPIRED'
+  };
+};
+
 const listConversations = async (req, res, next) => {
   try {
     const { status, assignedTo, search } = req.query;
@@ -22,7 +72,7 @@ const listConversations = async (req, res, next) => {
     let conversations = await Conversation.find(filter)
       .populate('contactId')
       .populate('assignedAgentId', 'name email')
-      .sort({ lastMessageAt: -1 })
+      .sort({ lastMessageAt: -1, updatedAt: -1 })
       .limit(100);
 
     if (search) {
@@ -34,15 +84,15 @@ const listConversations = async (req, res, next) => {
       });
     }
 
-    // Append 24-hour window status for each conversation
+    // Append accurate 24-hour window status for each conversation
     const now = Date.now();
     const formatted = conversations.map((conv) => {
       const convObj = conv.toObject();
-      const lastCustTime = conv.lastCustomerMessageAt ? new Date(conv.lastCustomerMessageAt).getTime() : 0;
-      const hoursSinceLastCust = (now - lastCustTime) / (1000 * 60 * 60);
-      convObj.isWindowOpen = hoursSinceLastCust <= 24;
-      convObj.windowExpiresInHours = Math.max(0, 24 - hoursSinceLastCust);
-      return convObj;
+      const windowInfo = compute24HourWindow(convObj, now);
+      return {
+        ...convObj,
+        ...windowInfo
+      };
     });
 
     return ApiResponse.success(res, 'Conversations retrieved successfully.', formatted);
@@ -73,12 +123,9 @@ const getConversation = async (req, res, next) => {
       .limit(200);
 
     const now = Date.now();
-    const lastCustTime = conversation.lastCustomerMessageAt ? new Date(conversation.lastCustomerMessageAt).getTime() : 0;
-    const hoursSinceLastCust = (now - lastCustTime) / (1000 * 60 * 60);
-
     const convObj = conversation.toObject();
-    convObj.isWindowOpen = hoursSinceLastCust <= 24;
-    convObj.windowExpiresInHours = Math.max(0, 24 - hoursSinceLastCust);
+    const windowInfo = compute24HourWindow(convObj, now);
+    Object.assign(convObj, windowInfo);
 
     return ApiResponse.success(res, 'Conversation thread retrieved.', {
       conversation: convObj,

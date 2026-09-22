@@ -53,9 +53,14 @@ const handleWebhook = async (req, res) => {
           const phoneNumberId = value.metadata.phone_number_id;
 
           // Route to tenant
-          const waba = await WabaAccount.findOne({ phoneNumberId });
+          const waba = await WabaAccount.findOne({
+            $or: [
+              { phoneNumberId: String(phoneNumberId).trim() },
+              { wabaId: String(entry.id).trim() }
+            ]
+          });
           if (!waba) {
-            console.warn(`[Webhook] Unrecognized phone_number_id: ${phoneNumberId}`);
+            console.warn(`[Webhook] Unrecognized phone_number_id: ${phoneNumberId}, entry.id: ${entry.id}`);
             continue;
           }
 
@@ -99,17 +104,36 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
     return;
   }
 
-  const senderPhone = msg.from;
+  const rawSender = String(msg.from || '').trim();
+  const digitsOnly = rawSender.replace(/\D/g, '');
+  const last10 = digitsOnly.slice(-10);
   const profileName = metaContacts?.[0]?.profile?.name || 'WhatsApp Customer';
 
+  // Search by any phone format variant (with +, without +, country code prefix, last 10 digits regex)
+  const phoneVariants = [
+    digitsOnly,
+    `+${digitsOnly}`,
+    last10,
+    `+${last10}`,
+    `91${last10}`,
+    `+91${last10}`
+  ];
+
   // 1. Find or create Contact
-  let contact = await Contact.findOne({ tenantId: tenant._id, phone: senderPhone });
+  let contact = await Contact.findOne({
+    tenantId: tenant._id,
+    $or: [
+      { phone: { $in: phoneVariants } },
+      { phone: new RegExp(`${last10}$`) }
+    ]
+  });
   const isFirstTimeLead = !contact;
 
   if (!contact) {
+    const formattedPhone = digitsOnly.length === 10 ? `+91${digitsOnly}` : `+${digitsOnly}`;
     contact = await Contact.create({
       tenantId: tenant._id,
-      phone: senderPhone,
+      phone: formattedPhone,
       name: profileName,
       leadStage: 'new',
       source: 'direct_inbound',
@@ -129,12 +153,16 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
       tenantId: tenant._id,
       contactId: contact._id,
       status: 'open',
-      lastCustomerMessageAt: new Date()
+      lastCustomerMessageAt: new Date(),
+      lastMessageAt: new Date(),
+      lastMessageText: ''
     });
   } else {
     conversation.lastCustomerMessageAt = new Date(); // Reset 24-hour service window
     conversation.unreadCount = (conversation.unreadCount || 0) + 1;
     conversation.status = 'open';
+    conversation.lastMessageAt = new Date();
+    await conversation.save();
   }
 
   // 3. Extract content & type
@@ -174,12 +202,25 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
   conversation.lastMessageAt = new Date();
   await conversation.save();
 
+  console.log(`[Webhook] Inbound WhatsApp message from "${msg.from}" (${profileName}): "${content}". Matched contact: "${contact.name}" (${contact.phone}). Conversation ${conversation._id} 24h window ACTIVATED.`);
+
   // Real-time socket broadcast to client dashboard
   socket.emitToConversation(conversation._id, 'new_message', savedMessage);
   socket.emitToTenant(tenant._id, 'conversation_message', {
     conversationId: conversation._id,
     message: savedMessage,
     contact: { id: contact._id, name: contact.name, phone: contact.phone }
+  });
+  socket.emitToTenant(tenant._id, 'conversation_updated', {
+    conversationId: conversation._id,
+    status: conversation.status,
+    isWindowOpen: true,
+    hasCustomerMessaged: true,
+    sessionStatus: 'ACTIVE',
+    windowExpiresInHours: 24,
+    lastCustomerMessageAt: conversation.lastCustomerMessageAt,
+    lastMessageAt: conversation.lastMessageAt,
+    lastMessageText: conversation.lastMessageText
   });
 
   // 5. Check Opt-out Rule: "STOP" or "UNSUBSCRIBE" (PL-02)

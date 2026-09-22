@@ -104,11 +104,14 @@ const createContact = async (req, res, next) => {
       optInSource: 'manual_admin'
     });
 
-    // Automatically create empty Conversation for this contact
+    // Automatically create empty Conversation for this contact (no customer inbound message yet)
     await Conversation.create({
       tenantId: req.tenantId,
       contactId: contact._id,
-      status: 'open'
+      status: 'open',
+      lastCustomerMessageAt: null,
+      lastMessageAt: null,
+      lastMessageText: ''
     });
 
     return ApiResponse.success(res, 'Contact created successfully.', contact, 201);
@@ -258,7 +261,10 @@ const importContacts = async (req, res, next) => {
       await Conversation.create({
         tenantId: req.tenantId,
         contactId: newContact._id,
-        status: 'open'
+        status: 'open',
+        lastCustomerMessageAt: null,
+        lastMessageAt: null,
+        lastMessageText: ''
       });
 
       importedCount++;

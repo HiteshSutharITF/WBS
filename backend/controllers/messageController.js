@@ -33,16 +33,22 @@ const sendTextMessage = async (req, res, next) => {
       return ApiResponse.badRequest(res, 'Cannot send WhatsApp message: recipient has no valid phone number.');
     }
 
-    // Enforce 24-hour customer window rule (PL-03, CL-11)
+    // Enforce 24-hour customer window rule (Meta Cloud API Policy)
     const now = Date.now();
-    const lastCustTime = conversation.lastCustomerMessageAt ? new Date(conversation.lastCustomerMessageAt).getTime() : 0;
-    const isWindowOpen = (now - lastCustTime) / (1000 * 60 * 60) <= 24;
+    const hasCustomerMessaged = Boolean(conversation.lastCustomerMessageAt);
+    let isWindowOpen = false;
+
+    if (hasCustomerMessaged) {
+      const lastCustTime = new Date(conversation.lastCustomerMessageAt).getTime();
+      const elapsedHours = (now - lastCustTime) / (1000 * 60 * 60);
+      isWindowOpen = elapsedHours >= 0 && elapsedHours <= 24;
+    }
 
     if (!isWindowOpen && !env.ENABLE_MOCK_FALLBACK) {
-      return ApiResponse.badRequest(
-        res,
-        'The 24-hour customer service window has expired. Meta policy requires an approved template message to re-initiate contact.'
-      );
+      const errorMsg = !hasCustomerMessaged
+        ? 'Cannot send free-form text: This contact has not sent an inbound message yet. Meta WhatsApp policy strictly requires sending an approved Template Message to initiate the conversation.'
+        : 'The 24-hour customer service window has expired. Meta WhatsApp policy requires sending an approved Template Message to re-open the conversation.';
+      return ApiResponse.badRequest(res, errorMsg);
     }
 
     const { phoneNumberId, token } = await getTenantWabaContext(req.tenantId);
@@ -115,6 +121,24 @@ const sendMediaMessage = async (req, res, next) => {
     const contact = conversation.contactId;
     if (!contact || !contact.phone) {
       return ApiResponse.badRequest(res, 'Recipient phone number is missing.');
+    }
+
+    // Enforce 24-hour customer window rule (Meta Cloud API Policy)
+    const now = Date.now();
+    const hasCustomerMessaged = Boolean(conversation.lastCustomerMessageAt);
+    let isWindowOpen = false;
+
+    if (hasCustomerMessaged) {
+      const lastCustTime = new Date(conversation.lastCustomerMessageAt).getTime();
+      const elapsedHours = (now - lastCustTime) / (1000 * 60 * 60);
+      isWindowOpen = elapsedHours >= 0 && elapsedHours <= 24;
+    }
+
+    if (!isWindowOpen && !env.ENABLE_MOCK_FALLBACK) {
+      const errorMsg = !hasCustomerMessaged
+        ? 'Cannot send free-form media: This contact has not sent an inbound message yet. Meta WhatsApp policy strictly requires sending an approved Template Message to initiate the conversation.'
+        : 'The 24-hour customer service window has expired. Meta WhatsApp policy requires sending an approved Template Message to re-open the conversation.';
+      return ApiResponse.badRequest(res, errorMsg);
     }
 
     const relativeMediaUrl = `uploads/media/${req.file.filename}`;

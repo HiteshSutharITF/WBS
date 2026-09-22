@@ -30,6 +30,16 @@ import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
 import Alert from '../../components/common/Alert';
 
+const formatRemainingWindow = (hours, minutes) => {
+  if (!hours && !minutes) return 'Expired';
+  const h = Math.floor(hours || 0);
+  const m = Math.round((minutes || 0) % 60);
+  if (h > 0) {
+    return `${h}h ${m}m left`;
+  }
+  return `${m}m left`;
+};
+
 const InboxPage = () => {
   const [conversations, setConversations] = useState([]);
   const [activeConvId, setActiveConvId] = useState(null);
@@ -112,14 +122,27 @@ const InboxPage = () => {
 
     const handleNewMessage = (newMsg) => {
       // If belongs to currently viewed conversation, append to thread
+      const isInbound = newMsg.direction === 'inbound';
+
+      // If belongs to currently viewed conversation, append to thread and open window if inbound
       if (activeConvId && newMsg.conversationId === activeConvId) {
         setActiveData((prev) => {
           if (!prev) return prev;
           const exists = prev.messages.some((m) => m._id === newMsg._id || (m.wamid && m.wamid === newMsg.wamid));
-          if (exists) return prev;
+          const updatedMessages = exists ? prev.messages : [...prev.messages, newMsg];
           return {
             ...prev,
-            messages: [...prev.messages, newMsg]
+            conversation: isInbound
+              ? {
+                  ...prev.conversation,
+                  isWindowOpen: true,
+                  hasCustomerMessaged: true,
+                  sessionStatus: 'ACTIVE',
+                  windowExpiresInHours: 24,
+                  windowExpiresInMinutes: 1440
+                }
+              : prev.conversation,
+            messages: updatedMessages
           };
         });
         setTimeout(scrollToBottom, 100);
@@ -133,7 +156,10 @@ const InboxPage = () => {
               ...c,
               lastMessageText: newMsg.content || `[${newMsg.messageType.toUpperCase()}]`,
               lastMessageAt: newMsg.createdAt,
-              isWindowOpen: newMsg.direction === 'inbound' ? true : c.isWindowOpen
+              isWindowOpen: isInbound ? true : c.isWindowOpen,
+              hasCustomerMessaged: isInbound ? true : c.hasCustomerMessaged,
+              sessionStatus: isInbound ? 'ACTIVE' : c.sessionStatus,
+              windowExpiresInHours: isInbound ? 24 : c.windowExpiresInHours
             };
           }
           return c;
@@ -341,10 +367,21 @@ const InboxPage = () => {
                         <span className="font-semibold text-xs text-slate-900 truncate">
                           {contact?.name || 'Unknown Lead'}
                         </span>
-                        {conv.isWindowOpen ? (
-                          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" title="24h Window Open" />
+                        {conv.sessionStatus === 'ACTIVE' || (conv.isWindowOpen && conv.hasCustomerMessaged) ? (
+                          <span
+                            className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"
+                            title={`24h Window Active (${Math.round(conv.windowExpiresInHours || 24)}h left)`}
+                          />
+                        ) : conv.sessionStatus === 'EXPIRED' ? (
+                          <span
+                            className="w-2 h-2 rounded-full bg-amber-400 shrink-0"
+                            title="24h Window Expired (Template Required)"
+                          />
                         ) : (
-                          <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" title="24h Window Closed" />
+                          <span
+                            className="w-2 h-2 rounded-full bg-slate-300 ring-1 ring-slate-400/50 shrink-0"
+                            title="No Inbound Message Yet (Template Required to Start)"
+                          />
                         )}
                       </div>
                       <p className="text-[11px] text-slate-400 font-mono mt-0.5">{contact?.phone || 'No phone'}</p>
@@ -394,15 +431,20 @@ const InboxPage = () => {
             {/* Actions & Window Indicator */}
             <div className="flex items-center gap-3">
               {/* 24h Window Badge */}
-              {isWindowOpen ? (
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-800 text-xs font-medium rounded-full border border-emerald-200">
+              {activeConv.sessionStatus === 'ACTIVE' || (isWindowOpen && activeConv.hasCustomerMessaged) ? (
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-800 text-xs font-semibold rounded-full border border-emerald-200">
                   <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>24h Active ({Math.round(activeConv.windowExpiresInHours || 24)}h left)</span>
+                  <span>24h Active ({formatRemainingWindow(activeConv.windowExpiresInHours, activeConv.windowExpiresInMinutes)})</span>
+                </div>
+              ) : activeConv.sessionStatus === 'EXPIRED' ? (
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-900 text-xs font-medium rounded-full border border-amber-200">
+                  <Clock className="w-3.5 h-3.5 text-amber-600" />
+                  <span>24h Expired (Template Required)</span>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-800 text-xs font-medium rounded-full border border-amber-200">
-                  <Clock className="w-3.5 h-3.5 text-amber-600" />
-                  <span>24h Expired (Template Only)</span>
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-full border border-slate-200">
+                  <Clock className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Session Inactive (Send Template to Start)</span>
                 </div>
               )}
 
@@ -509,8 +551,8 @@ const InboxPage = () => {
 
           {/* 3. Reply / Input Box Area */}
           <div className="p-4 bg-white border-t border-slate-200/80 shrink-0">
-            {isWindowOpen ? (
-              /* Free-Form Reply Input */
+            {isWindowOpen && activeConv?.hasCustomerMessaged ? (
+              /* Free-Form Reply Input (24h Window Active) */
               <form onSubmit={handleSendText} className="flex items-center gap-2">
                 <button
                   type="button"
@@ -549,21 +591,33 @@ const InboxPage = () => {
                 </Button>
               </form>
             ) : (
-              /* 24-Hour Window Expired Lockout Banner */
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between gap-4">
-                <div className="flex items-center gap-2.5 text-xs text-amber-900">
-                  <Clock className="w-5 h-5 text-amber-600 shrink-0" />
-                  <span>
-                    The 24-hour customer window is closed. To message this contact, Meta requires a pre-approved template message.
-                  </span>
+              /* 24-Hour Window Closed / Inactive Banner */
+              <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 bg-amber-100 text-amber-700 rounded-xl shrink-0 mt-0.5">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div className="text-xs text-amber-900">
+                    <p className="font-bold">
+                      {!activeConv?.hasCustomerMessaged
+                        ? '24-Hour Customer Window Not Started'
+                        : '24-Hour Customer Service Window Closed'}
+                    </p>
+                    <p className="text-amber-800 mt-0.5 leading-relaxed">
+                      {!activeConv?.hasCustomerMessaged
+                        ? 'This contact has not sent an inbound message yet. Meta WhatsApp policy strictly requires sending an approved Template Message to initiate the conversation.'
+                        : 'More than 24 hours have elapsed since the customer last replied. Meta policy requires sending an approved Template Message to re-open the conversation window.'}
+                    </p>
+                  </div>
                 </div>
                 <Button
                   variant="primary"
                   size="sm"
                   onClick={() => setIsTemplateModalOpen(true)}
                   icon={FileText}
+                  className="shrink-0 whitespace-nowrap"
                 >
-                  Choose Template
+                  Choose & Send Template
                 </Button>
               </div>
             )}

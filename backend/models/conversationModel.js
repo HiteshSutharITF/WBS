@@ -40,12 +40,12 @@ const conversationSchema = new mongoose.Schema(
     },
     lastMessageAt: {
       type: Date,
-      default: Date.now,
+      default: null,
       index: true
     },
     lastCustomerMessageAt: {
       type: Date,
-      default: Date.now
+      default: null
     },
     unreadCount: {
       type: Number,
