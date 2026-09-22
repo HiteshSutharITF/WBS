@@ -46,7 +46,7 @@ const Modal = ({ isOpen, onClose, title, children, footer, size = 'md' }) => {
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 md:p-4 overflow-y-auto">
       {/* Full-screen Backdrop overlay covering topbar and sidebar */}
       <div
-        className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
+        className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity animate-in fade-in duration-200"
         onClick={onClose}
         aria-hidden="true"
       />
