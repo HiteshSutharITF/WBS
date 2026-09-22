@@ -82,11 +82,22 @@ const completeWhatsAppOnboarding = async (req, res, next) => {
     }
 
     // 2. Subscribe app to client WABA webhooks
-    await MetaGraphApi.subscribeAppToWaba(effectiveWabaId, accessToken);
+    try {
+      await MetaGraphApi.subscribeAppToWaba(effectiveWabaId, accessToken);
+    } catch (subErr) {
+      console.warn('[Onboarding] Webhook subscription notice:', subErr.message);
+    }
 
-    // 3. Generate 6-digit PIN and register the phone number
-    const registrationPin = String(Math.floor(100000 + Math.random() * 900000));
-    await MetaGraphApi.registerPhoneNumber(effectivePhoneId, registrationPin, accessToken);
+    // 3. Register phone number if needed (gracefully handles error 133005 if already registered or 2SV PIN active)
+    let registrationPin = req.body.pin || '';
+    try {
+      const pinToTry = registrationPin || '123456';
+      await MetaGraphApi.registerPhoneNumber(effectivePhoneId, pinToTry, accessToken);
+      registrationPin = pinToTry;
+    } catch (regErr) {
+      console.warn('[Onboarding] Phone registration notice (number already active or 2SV PIN set on Meta):', regErr.message);
+      // Note: Error 133005 confirms the number already has an existing Two-Step Verification PIN on Meta
+    }
 
     // 4. Fetch phone number details and limits
     const phoneDetails = await MetaGraphApi.fetchPhoneNumberDetails(effectivePhoneId, accessToken);

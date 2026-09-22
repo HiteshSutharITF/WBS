@@ -484,6 +484,23 @@ const OnboardingPage = () => {
                   </p>
                 </div>
 
+                <div>
+                  <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
+                    Two-Step Verification 6-Digit PIN (Optional)
+                  </label>
+                  <input
+                    type="password"
+                    maxLength={6}
+                    value={directForm.pin || ''}
+                    onChange={(e) => setDirectForm({ ...directForm, pin: e.target.value })}
+                    className="w-full px-3 py-2 text-xs font-mono border border-slate-200 rounded-lg bg-white"
+                    placeholder="Leave blank if already set on Meta"
+                  />
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    If your number already has 2-Step Verification active, leave this blank.
+                  </p>
+                </div>
+
                 <div className="flex justify-end">
                   <Button
                     type="submit"
