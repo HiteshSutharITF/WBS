@@ -104,9 +104,9 @@ Run `npm run seed` anytime to populate initial demo accounts:
 # Start backend server
 npm start
 ```
-- **Client Portal**: `http://localhost:5000/`
-- **Super Admin Console**: `http://localhost:5000/admin/`
-- **Backend API Health**: `http://localhost:5000/api/health`
+- **Client Portal**: `http://localhost:2222/`
+- **Super Admin Console**: `http://localhost:2222/admin/`
+- **Backend API Health**: `http://localhost:2222/api/health`
 
 ### 2. Development Mode (Independent Hot-Reloading Servers)
 ```bash

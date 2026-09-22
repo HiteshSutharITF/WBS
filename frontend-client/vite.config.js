@@ -1,11 +1,12 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import basicSsl from '@vitejs/plugin-basic-ssl';
 import path from 'path';
+
+const backendTarget = process.env.VITE_BACKEND_URL || 'http://localhost:5000';
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), basicSsl()],
+  plugins: [react()],
   build: {
     outDir: path.resolve(import.meta.dirname || __dirname, '../backend/public'),
     emptyOutDir: true,
@@ -14,15 +15,15 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:5000',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:5000',
+        target: backendTarget,
         ws: true,
       },
     },

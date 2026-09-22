@@ -96,6 +96,33 @@ const OnboardingPage = () => {
     return () => window.removeEventListener('message', handleMetaMessage);
   }, []);
 
+  // 2. Handle Meta OAuth redirect with ?code=... in query params
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const codeParam = searchParams.get('code');
+    if (codeParam) {
+      setConnecting(true);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      tenantService
+        .completeOnboarding({
+          code: codeParam,
+          waba_id: signupDataRef.current.waba_id,
+          phone_number_id: signupDataRef.current.phone_number_id,
+          business_id: signupDataRef.current.business_id
+        })
+        .then((res) => {
+          setSuccessMsg(res.message || 'WhatsApp Business Account successfully connected!');
+          loadProfile();
+        })
+        .catch((err) => {
+          setErrorMsg(err.message || 'Failed to complete Meta token exchange.');
+        })
+        .finally(() => {
+          setConnecting(false);
+        });
+    }
+  }, []);
+
   // Primary: Connect WhatsApp with Meta (Official Embedded Signup v4)
   const handleConnectWhatsApp = async () => {
     setErrorMsg('');

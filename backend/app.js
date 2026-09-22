@@ -14,6 +14,9 @@ const errorHandler = require('./middleware/errorHandlerMiddleware');
 const app = express();
 const server = http.createServer(app);
 
+// Trust reverse proxy (Nginx / Cloudflare on wbs.itfuturz.in)
+app.set('trust proxy', 1);
+
 // Connect to MongoDB
 connectDB();
 
@@ -21,15 +24,37 @@ connectDB();
 const io = new Server(server, {
   cors: {
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE']
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    credentials: true
   }
 });
 initSocket(io);
 
 // Security & Parsing Middleware
+const allowedOrigins = [
+  'https://wbs.itfuturz.in',
+  'http://wbs.itfuturz.in',
+  'https://itfuturz.in',
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5000',
+  'http://localhost:2222'
+];
+
 app.use(
   cors({
-    origin: true,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      if (
+        allowedOrigins.indexOf(origin) !== -1 ||
+        origin.endsWith('.itfuturz.in') ||
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1')
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true); // Permissive fallback
+    },
     credentials: true
   })
 );
@@ -61,6 +86,10 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     product: 'WBS - WhatsApp Business Solution',
     version: '1.0.0',
+    domain: env.LIVE_DOMAIN || 'wbs.itfuturz.in',
+    host: env.HOST,
+    liveUrl: env.LIVE_URL || 'https://wbs.itfuturz.in',
+    webhookUrl: env.WEBHOOK_URL || 'https://wbs.itfuturz.in/webhook',
     metaApiVersion: env.META_GRAPH_API_VERSION,
     environment: env.NODE_ENV,
     timestamp: new Date().toISOString()
@@ -113,7 +142,7 @@ app.get('*', (req, res, next) => {
 app.use(errorHandler);
 
 // Start Server
-const PORT = env.PORT || 5000;
+const PORT = env.PORT || 2222;
 server.listen(PORT, () => {
   console.log(`[WBS Server] Running on ${env.HOST} in ${env.NODE_ENV} mode.`);
   console.log(`[WBS Server] Client Portal at ${env.HOST}/`);
