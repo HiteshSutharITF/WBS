@@ -31,7 +31,16 @@ export const chatService = {
     });
   },
 
-  sendTemplateMessage: async (conversationId, templateId, parameters = []) => {
-    return api.post('/messages/template', { conversationId, templateId, parameters });
+  uploadMediaAsset: async (formData) => {
+    return api.post('/messages/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
+
+  sendTemplateMessage: async (conversationId, templateId, parameters = [], options = {}) => {
+    const payload = typeof conversationId === 'object'
+      ? conversationId
+      : { conversationId, templateId, parameters, ...options };
+    return api.post('/messages/template', payload);
   }
 };

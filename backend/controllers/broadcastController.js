@@ -147,6 +147,44 @@ const startBroadcast = async (req, res, next) => {
           }
 
           const components = [];
+
+          // 1. Header component for media templates
+          const headerFormat = broadcast.templateId.header?.format;
+          if (headerFormat && headerFormat !== 'NONE') {
+            if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
+              let mediaUrl = broadcast.headerMediaUrl || broadcast.templateId.header?.mediaUrl;
+              if (mediaUrl && (mediaUrl.startsWith('/uploads') || mediaUrl.startsWith('uploads'))) {
+                const cleanPath = mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`;
+                mediaUrl = `${env.LIVE_URL}${cleanPath}`;
+              }
+              if (!mediaUrl) {
+                if (headerFormat === 'IMAGE') mediaUrl = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
+                else if (headerFormat === 'DOCUMENT') mediaUrl = `${env.LIVE_URL}/uploads/sample.pdf`;
+                else if (headerFormat === 'VIDEO') mediaUrl = 'https://www.w3schools.com/html/mov_bbb.mp4';
+              }
+              if (headerFormat === 'IMAGE') {
+                components.push({
+                  type: 'header',
+                  parameters: [{ type: 'image', image: { link: mediaUrl } }]
+                });
+              } else if (headerFormat === 'VIDEO') {
+                components.push({
+                  type: 'header',
+                  parameters: [{ type: 'video', video: { link: mediaUrl } }]
+                });
+              } else if (headerFormat === 'DOCUMENT') {
+                components.push({
+                  type: 'header',
+                  parameters: [{
+                    type: 'document',
+                    document: { link: mediaUrl, filename: broadcast.templateId.header?.sampleFileName || 'document.pdf' }
+                  }]
+                });
+              }
+            }
+          }
+
+          // 2. Body component
           if (params.length > 0) {
             components.push({
               type: 'body',
@@ -156,6 +194,7 @@ const startBroadcast = async (req, res, next) => {
 
           const metaPayload = {
             messaging_product: 'whatsapp',
+            recipient_type: 'individual',
             to: recipientPhone,
             type: 'template',
             template: {

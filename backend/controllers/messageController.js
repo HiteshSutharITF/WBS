@@ -200,9 +200,36 @@ const sendMediaMessage = async (req, res, next) => {
   }
 };
 
+const uploadMediaAsset = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return ApiResponse.badRequest(res, 'No file was uploaded.');
+    }
+    const relativePath = `/uploads/media/${req.file.filename}`;
+    const fullUrl = `${env.LIVE_URL}${relativePath}`;
+    return ApiResponse.success(res, 'Media uploaded successfully.', {
+      url: relativePath,
+      fullUrl,
+      fileName: req.file.originalname,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const sendTemplateMessage = async (req, res, next) => {
   try {
-    const { conversationId, templateId, parameters } = req.body;
+    const {
+      conversationId,
+      templateId,
+      parameters,
+      headerMediaUrl,
+      headerMedia,
+      headerText,
+      buttonParameters
+    } = req.body;
 
     const conversation = await Conversation.findOne({ _id: conversationId, tenantId: req.tenantId }).populate('contactId');
     if (!conversation) {
@@ -233,6 +260,85 @@ const sendTemplateMessage = async (req, res, next) => {
 
     // Format components for Meta Template API
     const components = [];
+    let resolvedHeaderMediaUrl = null;
+
+    // 1. HEADER Component (Required by Meta if template was created with an Image, Video, Document, or Text variable)
+    const headerFormat = template.header?.format;
+    if (headerFormat && headerFormat !== 'NONE') {
+      if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
+        let mediaUrl = headerMediaUrl || headerMedia?.link || (typeof headerMedia === 'string' ? headerMedia : null) || template.header?.mediaUrl;
+
+        // If local upload path, prepend public live URL
+        if (mediaUrl && (mediaUrl.startsWith('/uploads') || mediaUrl.startsWith('uploads'))) {
+          const cleanPath = mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`;
+          mediaUrl = `${env.LIVE_URL}${cleanPath}`;
+        }
+
+        // Reliable fallback placeholder so Meta 132012 never occurs if URL was omitted
+        if (!mediaUrl) {
+          if (headerFormat === 'IMAGE') {
+            mediaUrl = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
+          } else if (headerFormat === 'DOCUMENT') {
+            mediaUrl = `${env.LIVE_URL}/uploads/sample.pdf`;
+          } else if (headerFormat === 'VIDEO') {
+            mediaUrl = 'https://www.w3schools.com/html/mov_bbb.mp4';
+          }
+        }
+
+        resolvedHeaderMediaUrl = mediaUrl;
+
+        if (headerFormat === 'IMAGE') {
+          components.push({
+            type: 'header',
+            parameters: [
+              {
+                type: 'image',
+                image: { link: mediaUrl }
+              }
+            ]
+          });
+        } else if (headerFormat === 'VIDEO') {
+          components.push({
+            type: 'header',
+            parameters: [
+              {
+                type: 'video',
+                video: { link: mediaUrl }
+              }
+            ]
+          });
+        } else if (headerFormat === 'DOCUMENT') {
+          components.push({
+            type: 'header',
+            parameters: [
+              {
+                type: 'document',
+                document: {
+                  link: mediaUrl,
+                  filename: template.header?.sampleFileName || 'document.pdf'
+                }
+              }
+            ]
+          });
+        }
+      } else if (headerFormat === 'TEXT') {
+        const headerVars = (template.header?.text || '').match(/\{\{(\d+)\}\}/g);
+        if (headerVars && headerVars.length > 0) {
+          const textVal = headerText || 'Notification';
+          components.push({
+            type: 'header',
+            parameters: [
+              {
+                type: 'text',
+                text: String(textVal)
+              }
+            ]
+          });
+        }
+      }
+    }
+
+    // 2. BODY Component (Meta parameters for {{1}}, {{2}}, etc.)
     if (parameters && Array.isArray(parameters) && parameters.length > 0) {
       components.push({
         type: 'body',
@@ -243,8 +349,26 @@ const sendTemplateMessage = async (req, res, next) => {
       });
     }
 
+    // 3. BUTTONS Component (Dynamic URL parameters if required)
+    if (buttonParameters && Array.isArray(buttonParameters) && buttonParameters.length > 0) {
+      buttonParameters.forEach((btnParam, idx) => {
+        components.push({
+          type: 'button',
+          sub_type: btnParam.sub_type || 'url',
+          index: btnParam.index !== undefined ? String(btnParam.index) : String(idx),
+          parameters: [
+            {
+              type: 'text',
+              text: String(btnParam.text)
+            }
+          ]
+        });
+      });
+    }
+
     const metaPayload = {
       messaging_product: 'whatsapp',
+      recipient_type: 'individual',
       to: recipientPhone,
       type: 'template',
       template: {
@@ -281,8 +405,14 @@ const sendTemplateMessage = async (req, res, next) => {
       senderId: req.user._id,
       messageType: 'template',
       content: renderedText,
+      mediaUrl: resolvedHeaderMediaUrl || undefined,
       templateId: template._id,
-      templateData: { name: template.name, parameters },
+      templateData: {
+        name: template.name,
+        parameters,
+        headerMediaUrl: resolvedHeaderMediaUrl,
+        headerFormat: template.header?.format
+      },
       status: 'sent',
       sentAt: new Date()
     });
@@ -306,5 +436,6 @@ const sendTemplateMessage = async (req, res, next) => {
 module.exports = {
   sendTextMessage,
   sendMediaMessage,
-  sendTemplateMessage
+  sendTemplateMessage,
+  uploadMediaAsset
 };

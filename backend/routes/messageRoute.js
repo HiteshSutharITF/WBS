@@ -13,5 +13,6 @@ router.use(requireTenant);
 router.post('/text', validate(validateTextMessage), messageController.sendTextMessage);
 router.post('/media', uploadMedia.single('file'), messageController.sendMediaMessage);
 router.post('/template', validate(validateTemplateMessage), messageController.sendTemplateMessage);
+router.post('/upload', uploadMedia.single('file'), messageController.uploadMediaAsset);
 
 module.exports = router;

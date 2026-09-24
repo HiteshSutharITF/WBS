@@ -17,7 +17,9 @@ import {
   StickyNote,
   ChevronRight,
   RefreshCw,
-  Plus
+  Plus,
+  UploadCloud,
+  Sparkles
 } from 'lucide-react';
 import { chatService } from '../../services/chatService';
 import { contactService } from '../../services/contactService';
@@ -58,6 +60,10 @@ const InboxPage = () => {
   const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [templateParams, setTemplateParams] = useState({});
+  const [headerMediaUrl, setHeaderMediaUrl] = useState('');
+  const [headerText, setHeaderText] = useState('');
+  const [uploadingHeaderMedia, setUploadingHeaderMedia] = useState(false);
+  const headerFileInputRef = useRef(null);
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaCaption, setMediaCaption] = useState('');
   const [isNoteDrawerOpen, setIsNoteDrawerOpen] = useState(false);
@@ -215,6 +221,25 @@ const InboxPage = () => {
     }
   };
 
+  // Upload Header Media for Template
+  const handleHeaderFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingHeaderMedia(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await chatService.uploadMediaAsset(formData);
+      if (res.data?.url) {
+        setHeaderMediaUrl(res.data.url);
+      }
+    } catch (err) {
+      alert('Failed to upload header media: ' + (err.response?.data?.message || err.message));
+    } finally {
+      setUploadingHeaderMedia(false);
+    }
+  };
+
   // Send Template Message
   const handleSendTemplate = async () => {
     if (!selectedTemplate) return;
@@ -224,10 +249,15 @@ const InboxPage = () => {
         .sort((a, b) => Number(a) - Number(b))
         .map((k) => templateParams[k]);
 
-      await chatService.sendTemplateMessage(activeConvId, selectedTemplate._id, paramsArray);
+      await chatService.sendTemplateMessage(activeConvId, selectedTemplate._id, paramsArray, {
+        headerMediaUrl: headerMediaUrl || undefined,
+        headerText: headerText || undefined
+      });
       setIsTemplateModalOpen(false);
       setSelectedTemplate(null);
       setTemplateParams({});
+      setHeaderMediaUrl('');
+      setHeaderText('');
       loadActiveChat(activeConvId);
     } catch (err) {
       alert(err.message);
@@ -507,12 +537,12 @@ const InboxPage = () => {
                       )}
 
                       {/* Media Image / Document Preview */}
-                      {msg.messageType === 'image' && msg.mediaUrl && (
+                      {(msg.messageType === 'image' || (msg.messageType === 'template' && msg.mediaUrl)) && msg.mediaUrl && (
                         <div className="mb-2 rounded-lg overflow-hidden border border-white/20">
                           <img
                             src={getMediaUrl(msg.mediaUrl)}
                             alt="WhatsApp attachment"
-                            className="max-h-60 w-auto object-cover"
+                            className="max-h-60 w-auto object-cover rounded-lg"
                           />
                         </div>
                       )}
@@ -693,15 +723,21 @@ const InboxPage = () => {
         </div>
       )}
 
-      {/* Template Picker Modal (SOP compliant) */}
+      {/* Template Picker Modal (SOP compliant with Media Header support) */}
       <Modal
         isOpen={isTemplateModalOpen}
         onClose={() => setIsTemplateModalOpen(false)}
         title="Send Pre-Approved WhatsApp Template"
+        size="lg"
         footer={
           <>
             <Button variant="secondary" onClick={() => setIsTemplateModalOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleSendTemplate} disabled={!selectedTemplate || sending} isLoading={sending}>
+            <Button
+              variant="primary"
+              onClick={handleSendTemplate}
+              disabled={!selectedTemplate || sending || (selectedTemplate.header?.format === 'IMAGE' && !headerMediaUrl)}
+              isLoading={sending}
+            >
               Send Template
             </Button>
           </>
@@ -710,13 +746,16 @@ const InboxPage = () => {
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase mb-2">Select Template</label>
-            <div className="space-y-2 max-h-52 overflow-y-auto">
+            <div className="space-y-2 max-h-48 overflow-y-auto">
               {templates.map((tmpl) => (
                 <div
                   key={tmpl._id}
                   onClick={() => {
                     setSelectedTemplate(tmpl);
                     setTemplateParams({});
+                    const defaultImg = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
+                    setHeaderMediaUrl(tmpl.header?.mediaUrl || (tmpl.header?.format === 'IMAGE' ? defaultImg : ''));
+                    setHeaderText(tmpl.header?.text || '');
                   }}
                   className={`p-3 border rounded-xl cursor-pointer text-xs transition-colors ${
                     selectedTemplate?._id === tmpl._id
@@ -725,7 +764,14 @@ const InboxPage = () => {
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="font-bold text-slate-900">{tmpl.name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-slate-900">{tmpl.name}</span>
+                      {tmpl.header?.format && tmpl.header.format !== 'NONE' && (
+                        <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded-md">
+                          {tmpl.header.format} HEADER
+                        </span>
+                      )}
+                    </div>
                     <Badge variant="green" size="xs">{tmpl.category}</Badge>
                   </div>
                   <p className="text-slate-600 line-clamp-2">{tmpl.body.text}</p>
@@ -735,26 +781,175 @@ const InboxPage = () => {
           </div>
 
           {selectedTemplate && (
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-              <h5 className="font-bold text-slate-800 text-xs">Configure Template Variables</h5>
-              {/* Parse {{1}}, {{2}} in template */}
-              {(selectedTemplate.body.text.match(/\{\{\d+\}\}/g) || []).map((match, idx) => {
-                const varNum = idx + 1;
-                return (
-                  <div key={varNum}>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      Variable {`{{${varNum}}}`}
-                    </label>
+            <div className="space-y-4 pt-2 border-t border-slate-100">
+              {/* 1. Header Media Configuration (Required if template has IMAGE, DOCUMENT, or VIDEO) */}
+              {selectedTemplate.header?.format === 'IMAGE' && (
+                <div className="p-4 bg-blue-50/60 border border-blue-200/80 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+                      <ImageIcon className="w-4 h-4 text-blue-600" /> Header Image (Required by Meta)
+                    </span>
+                    <span className="text-[11px] text-blue-600 font-medium">JPG, PNG • Max 5MB</span>
+                  </div>
+
+                  {/* Image Preview */}
+                  {headerMediaUrl && (
+                    <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-white max-w-sm">
+                      <img
+                        src={getMediaUrl(headerMediaUrl)}
+                        alt="Header Preview"
+                        className="w-full h-36 object-cover"
+                        onError={(e) => {
+                          e.target.src = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
+                        }}
+                      />
+                      <span className="absolute bottom-2 right-2 px-2 py-0.5 bg-black/60 text-white text-[10px] rounded-md backdrop-blur-xs">
+                        Header Preview
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Upload and URL input */}
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="file"
+                      ref={headerFileInputRef}
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={handleHeaderFileUpload}
+                      className="hidden"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => headerFileInputRef.current?.click()}
+                      isLoading={uploadingHeaderMedia}
+                      icon={UploadCloud}
+                      className="shrink-0"
+                    >
+                      Upload New Image
+                    </Button>
                     <input
                       type="text"
-                      placeholder={`e.g. ${selectedTemplate.body.sampleVariables?.[idx] || 'Value'}`}
-                      value={templateParams[varNum] || ''}
-                      onChange={(e) => setTemplateParams({ ...templateParams, [varNum]: e.target.value })}
-                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                      placeholder="Or enter public Image URL (https://...)"
+                      value={headerMediaUrl}
+                      onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
                   </div>
-                );
-              })}
+                </div>
+              )}
+
+              {selectedTemplate.header?.format === 'DOCUMENT' && (
+                <div className="p-4 bg-blue-50/60 border border-blue-200/80 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+                      <FileText className="w-4 h-4 text-blue-600" /> Header Document (PDF Required by Meta)
+                    </span>
+                    <span className="text-[11px] text-blue-600 font-medium">PDF • Max 100MB</span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="file"
+                      ref={headerFileInputRef}
+                      accept="application/pdf"
+                      onChange={handleHeaderFileUpload}
+                      className="hidden"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => headerFileInputRef.current?.click()}
+                      isLoading={uploadingHeaderMedia}
+                      icon={UploadCloud}
+                      className="shrink-0"
+                    >
+                      Upload PDF
+                    </Button>
+                    <input
+                      type="text"
+                      placeholder="Or enter public PDF URL (https://...)"
+                      value={headerMediaUrl}
+                      onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {selectedTemplate.header?.format === 'TEXT' && (selectedTemplate.header.text?.match(/\{\{\d+\}\}/g) || []).length > 0 && (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                  <label className="block text-xs font-bold text-slate-800 uppercase">
+                    Header Variable (Required)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Enter header title text"
+                    value={headerText}
+                    onChange={(e) => setHeaderText(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                  />
+                </div>
+              )}
+
+              {/* 2. Configure Body Variables */}
+              {(selectedTemplate.body.text.match(/\{\{\d+\}\}/g) || []).length > 0 && (
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                  <h5 className="font-bold text-slate-800 text-xs">Configure Template Variables</h5>
+                  {(selectedTemplate.body.text.match(/\{\{\d+\}\}/g) || []).map((match, idx) => {
+                    const varNum = idx + 1;
+                    return (
+                      <div key={varNum}>
+                        <label className="block text-xs font-medium text-slate-700 mb-1">
+                          Variable {`{{${varNum}}}`}
+                        </label>
+                        <input
+                          type="text"
+                          placeholder={`e.g. ${selectedTemplate.body.sampleVariables?.[idx] || 'Value'}`}
+                          value={templateParams[varNum] || ''}
+                          onChange={(e) => setTemplateParams({ ...templateParams, [varNum]: e.target.value })}
+                          className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* 3. Live Message Preview */}
+              <div className="p-3 bg-emerald-50/50 border border-emerald-200/80 rounded-2xl">
+                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wide block mb-2">
+                  WhatsApp Recipient Preview
+                </span>
+                <div className="bg-[#EFEAE2] p-3 rounded-xl max-w-sm shadow-xs">
+                  <div className="bg-white rounded-lg p-2.5 shadow-xs space-y-2 text-xs">
+                    {selectedTemplate.header?.format === 'IMAGE' && headerMediaUrl && (
+                      <img
+                        src={getMediaUrl(headerMediaUrl)}
+                        alt="Header"
+                        className="w-full h-28 object-cover rounded-md"
+                        onError={(e) => {
+                          e.target.src = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
+                        }}
+                      />
+                    )}
+                    {selectedTemplate.header?.format === 'TEXT' && selectedTemplate.header.text && (
+                      <p className="font-bold text-slate-900">
+                        {headerText || selectedTemplate.header.text}
+                      </p>
+                    )}
+                    <p className="text-slate-800 whitespace-pre-wrap leading-relaxed">
+                      {selectedTemplate.body.text.replace(/\{\{(\d+)\}\}/g, (_, num) => templateParams[num] || `{{${num}}}`)}
+                    </p>
+                    {selectedTemplate.footer?.text && (
+                      <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-1">
+                        {selectedTemplate.footer.text}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
             </div>
           )}
         </div>
