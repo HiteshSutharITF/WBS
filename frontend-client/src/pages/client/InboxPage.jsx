@@ -763,18 +763,34 @@ const InboxPage = () => {
                       : 'border-slate-200 hover:bg-slate-50'
                   }`}
                 >
-                  <div className="flex items-center justify-between mb-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-900">{tmpl.name}</span>
-                      {tmpl.header?.format && tmpl.header.format !== 'NONE' && (
-                        <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded-md">
-                          {tmpl.header.format} HEADER
-                        </span>
-                      )}
+                  <div className="flex items-start gap-3">
+                    {tmpl.header?.format === 'IMAGE' && tmpl.header?.mediaUrl && (
+                      <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-100 mt-0.5">
+                        <img
+                          src={getMediaUrl(tmpl.header.mediaUrl)}
+                          alt={tmpl.name}
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            e.target.src = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=200';
+                          }}
+                        />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 truncate">{tmpl.name}</span>
+                          {tmpl.header?.format && tmpl.header.format !== 'NONE' && (
+                            <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded-md">
+                              {tmpl.header.format} HEADER
+                            </span>
+                          )}
+                        </div>
+                        <Badge variant="green" size="xs">{tmpl.category}</Badge>
+                      </div>
+                      <p className="text-slate-600 line-clamp-2">{tmpl.body.text}</p>
                     </div>
-                    <Badge variant="green" size="xs">{tmpl.category}</Badge>
                   </div>
-                  <p className="text-slate-600 line-clamp-2">{tmpl.body.text}</p>
                 </div>
               ))}
             </div>

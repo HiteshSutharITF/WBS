@@ -454,10 +454,12 @@ class MetaGraphApi {
 
     for (const comp of components) {
       if (comp.type === 'HEADER') {
+        const sampleUrl = comp.example?.header_handle?.[0] || '';
         header = {
           format: comp.format || 'NONE',
           text: comp.text || '',
-          mediaUrl: ''
+          mediaUrl: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(comp.format) ? sampleUrl : '',
+          headerHandle: sampleUrl
         };
       } else if (comp.type === 'BODY') {
         body = {

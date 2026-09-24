@@ -38,6 +38,7 @@ import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
 import Drawer from '../../components/common/Drawer';
 import Alert from '../../components/common/Alert';
+import { getMediaUrl } from '../../utils/formatters';
 
 const LANGUAGES = [
   { code: 'en_US', label: 'English (US)' },
@@ -831,11 +832,14 @@ const TemplatesPage = () => {
                   )}
                   {['IMAGE', 'DOCUMENT', 'VIDEO'].includes(tmpl.header?.format) && (
                     tmpl.header?.format === 'IMAGE' && tmpl.header?.mediaUrl ? (
-                      <div className="relative rounded-lg overflow-hidden max-h-32 mb-2 border border-slate-300/60 bg-slate-100">
+                      <div className="relative rounded-lg overflow-hidden max-h-36 mb-2 border border-slate-300/60 bg-slate-100">
                         <img
-                          src={tmpl.header.mediaUrl}
+                          src={getMediaUrl(tmpl.header.mediaUrl)}
                           alt={tmpl.name}
-                          className="w-full h-auto max-h-32 object-cover"
+                          className="w-full h-36 object-cover"
+                          onError={(e) => {
+                            e.target.src = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=800&auto=format&fit=crop&q=80';
+                          }}
                         />
                       </div>
                     ) : (

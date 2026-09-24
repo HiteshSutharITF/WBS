@@ -195,6 +195,19 @@ const syncTemplates = async (req, res, next) => {
       for (const item of metaTemplates.data) {
         const { header, body, footer, buttons } = MetaGraphApi.parseMetaTemplateComponents(item.components);
 
+        const existingTmpl = await Template.findOne({
+          tenantId: req.tenantId,
+          name: item.name.toLowerCase()
+        });
+
+        // Preserve local mediaUrl if Meta didn't provide one
+        if (existingTmpl?.header?.mediaUrl && !header.mediaUrl) {
+          header.mediaUrl = existingTmpl.header.mediaUrl;
+        }
+        if (existingTmpl?.header?.sampleFileName && !header.sampleFileName) {
+          header.sampleFileName = existingTmpl.header.sampleFileName;
+        }
+
         // Upsert so both existing AND previously approved Meta templates are fetched/imported!
         await Template.findOneAndUpdate(
           { tenantId: req.tenantId, name: item.name.toLowerCase() },
