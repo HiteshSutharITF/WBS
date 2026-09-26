@@ -267,6 +267,47 @@ class MetaGraphApi {
   }
 
   /**
+   * Mark an inbound customer message as read on WhatsApp (blue ticks on customer's phone).
+   * POST /{phone-number-id}/messages { messaging_product, status: 'read', message_id }
+   */
+  static async markMessageAsRead(phoneNumberId, businessToken, wamid) {
+    if (!wamid) {
+      throw new Error('message_id (wamid) is required to mark as read.');
+    }
+    if (businessToken && businessToken.startsWith('mock_')) {
+      if (env.ENABLE_MOCK_FALLBACK) {
+        return { success: true };
+      }
+      throw new Error('Cannot mark message as read: Account has a demo/mock token.');
+    }
+
+    try {
+      const response = await metaClient.post(
+        `/${phoneNumberId}/messages`,
+        {
+          messaging_product: 'whatsapp',
+          status: 'read',
+          message_id: wamid
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${businessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      return response.data;
+    } catch (error) {
+      if (env.ENABLE_MOCK_FALLBACK) {
+        return { success: true };
+      }
+      const errData = error.response?.data?.error;
+      const errorMsg = errData ? `[Meta ${errData.code}] ${errData.message}` : error.message;
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
    * Send WhatsApp message (Text, Media, Template, Interactive)
    */
   static async sendMessage(phoneNumberId, businessToken, messagePayload) {

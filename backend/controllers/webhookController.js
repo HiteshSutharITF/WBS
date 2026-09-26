@@ -139,6 +139,38 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
     return;
   }
 
+  // Customer emoji reaction on an existing message (not a new chat bubble)
+  if (msg.type === 'reaction') {
+    const targetWamid = msg.reaction?.message_id || '';
+    const emoji = msg.reaction?.emoji != null ? String(msg.reaction.emoji) : '';
+    if (!targetWamid) return;
+
+    const target = await Message.findOne({ tenantId: tenant._id, wamid: targetWamid });
+    if (!target) {
+      console.warn(`[Webhook] Reaction for unknown wamid ${targetWamid}`);
+      return;
+    }
+
+    // One customer reaction per message — replace or clear
+    target.reactions = (target.reactions || []).filter((r) => r.actorType !== 'customer');
+    if (emoji) {
+      target.reactions.push({
+        emoji,
+        actorType: 'customer',
+        actorId: null,
+        reactedAt: new Date(parseInt(msg.timestamp, 10) * 1000 || Date.now())
+      });
+    }
+    await target.save();
+
+    socket.emitToConversation(target.conversationId, 'message_updated', target);
+    socket.emitToTenant(tenant._id, 'message_updated', {
+      conversationId: target.conversationId,
+      message: target
+    });
+    return;
+  }
+
   const rawSender = String(msg.from || '').trim();
   const digitsOnly = rawSender.replace(/\D/g, '');
   const last10 = digitsOnly.slice(-10);
@@ -233,6 +265,35 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
     content = `[${msg.type.toUpperCase()}]`;
   }
 
+  // Resolve WhatsApp quote/reply context (customer replied to a specific message)
+  let replyTo = undefined;
+  const repliedWamid = msg.context?.id || msg.context?.message_id || '';
+  if (repliedWamid) {
+    const original = await Message.findOne({
+      tenantId: tenant._id,
+      conversationId: conversation._id,
+      wamid: repliedWamid
+    });
+    const origOutbound =
+      original?.direction === 'outbound' ||
+      original?.senderType === 'agent' ||
+      original?.senderType === 'bot';
+    replyTo = {
+      messageId: original?._id || null,
+      wamid: repliedWamid,
+      content: original?.content || '',
+      messageType: original?.messageType || 'text',
+      mediaUrl: original?.mediaUrl || '',
+      direction: original?.direction || '',
+      senderType: original?.senderType || '',
+      senderName: origOutbound
+        ? original?.senderType === 'bot'
+          ? 'Chatbot'
+          : 'You'
+        : contact?.name || 'Customer'
+    };
+  }
+
   // 4. Save Inbound Message
   const savedMessage = await Message.create({
     tenantId: tenant._id,
@@ -245,6 +306,7 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
     content,
     mediaUrl,
     mediaType: mediaType || undefined,
+    replyTo,
     status: 'delivered',
     sentAt: new Date(parseInt(msg.timestamp) * 1000 || Date.now())
   });

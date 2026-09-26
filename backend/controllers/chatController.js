@@ -1,6 +1,50 @@
 const ApiResponse = require('../utils/apiResponse');
-const { Conversation, Message, Contact } = require('../models/zindex');
+const { Conversation, Message, Contact, WabaAccount } = require('../models/zindex');
 const socket = require('../config/socket');
+const cryptoUtils = require('../utils/cryptoUtils');
+const MetaGraphApi = require('../utils/metaGraphApi');
+const env = require('../config/env');
+
+/**
+ * Tell Meta that the business read the customer's messages → blue ticks on their phone.
+ * Marks the latest unread inbound wamid (WhatsApp treats this as conversation seen).
+ */
+const markInboundMessagesReadOnWhatsApp = async (tenantId, conversationId) => {
+  try {
+    const unreadInbound = await Message.find({
+      tenantId,
+      conversationId,
+      direction: 'inbound',
+      status: { $ne: 'read' },
+      wamid: { $exists: true, $nin: [null, ''] }
+    })
+      .sort({ createdAt: -1 })
+      .limit(5);
+
+    if (!unreadInbound.length) return;
+
+    const waba = await WabaAccount.findOne({ tenantId });
+    if (!waba || waba.status === 'disconnected' || !waba.phoneNumberId) return;
+
+    const token = cryptoUtils.decrypt(waba.encryptedToken);
+    if (!token || (token.startsWith('mock_') && !env.ENABLE_MOCK_FALLBACK)) return;
+
+    // Meta: mark the most recent inbound message as read (shows seen on customer device)
+    const latest = unreadInbound[0];
+    if (latest.wamid && !String(latest.wamid).startsWith('wamid.local')) {
+      await MetaGraphApi.markMessageAsRead(waba.phoneNumberId, token, latest.wamid);
+    }
+
+    const ids = unreadInbound.map((m) => m._id);
+    await Message.updateMany(
+      { _id: { $in: ids } },
+      { $set: { status: 'read', readAt: new Date() } }
+    );
+  } catch (err) {
+    // Never block opening the chat if Meta read receipt fails
+    console.warn('[Chat] mark-as-read failed:', err.message);
+  }
+};
 
 // Precise Meta 24-hour customer service window calculator
 const compute24HourWindow = (conversation, now = Date.now()) => {
@@ -118,9 +162,16 @@ const getConversation = async (req, res, next) => {
       await conversation.save();
     }
 
-    const messages = await Message.find({ conversationId: conversation._id, tenantId: req.tenantId })
+    const messages = await Message.find({
+      conversationId: conversation._id,
+      tenantId: req.tenantId,
+      hiddenFor: { $ne: req.user._id }
+    })
       .sort({ createdAt: 1 })
       .limit(200);
+
+    // Fire-and-forget: send WhatsApp "seen" (blue ticks) to the customer's phone
+    markInboundMessagesReadOnWhatsApp(req.tenantId, conversation._id);
 
     const now = Date.now();
     const convObj = conversation.toObject();
@@ -131,6 +182,35 @@ const getConversation = async (req, res, next) => {
       conversation: convObj,
       messages
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Explicit mark-as-read (also used when a new inbound arrives while agent is viewing the chat).
+ */
+const markConversationRead = async (req, res, next) => {
+  try {
+    const { conversationId } = req.params;
+    const conversation = await Conversation.findOne({ _id: conversationId, tenantId: req.tenantId });
+    if (!conversation) {
+      return ApiResponse.notFound(res, 'Conversation not found.');
+    }
+
+    if (conversation.unreadCount > 0) {
+      conversation.unreadCount = 0;
+      await conversation.save();
+    }
+
+    await markInboundMessagesReadOnWhatsApp(req.tenantId, conversation._id);
+
+    socket.emitToTenant(req.tenantId, 'conversation_updated', {
+      conversationId: conversation._id,
+      unreadCount: 0
+    });
+
+    return ApiResponse.success(res, 'Messages marked as read on WhatsApp.');
   } catch (error) {
     next(error);
   }
@@ -226,6 +306,7 @@ const updateStatus = async (req, res, next) => {
 module.exports = {
   listConversations,
   getConversation,
+  markConversationRead,
   assignAgent,
   toggleBotPause,
   updateStatus

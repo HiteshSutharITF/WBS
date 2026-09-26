@@ -14,5 +14,7 @@ router.post('/text', validate(validateTextMessage), messageController.sendTextMe
 router.post('/media', uploadMedia.single('file'), messageController.sendMediaMessage);
 router.post('/template', validate(validateTemplateMessage), messageController.sendTemplateMessage);
 router.post('/upload', uploadMedia.single('file'), messageController.uploadMediaAsset);
+router.post('/:messageId/react', messageController.reactToMessage);
+router.post('/:messageId/delete', messageController.deleteMessage);
 
 module.exports = router;

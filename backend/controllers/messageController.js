@@ -152,7 +152,7 @@ const buildHeaderMediaParameter = (headerFormat, mediaObject, sampleFileName) =>
 
 const sendTextMessage = async (req, res, next) => {
   try {
-    const { conversationId, content } = req.body;
+    const { conversationId, content, replyToMessageId } = req.body;
 
     const conversation = await Conversation.findOne({ _id: conversationId, tenantId: req.tenantId }).populate('contactId');
     if (!conversation) {
@@ -182,6 +182,37 @@ const sendTextMessage = async (req, res, next) => {
       return ApiResponse.badRequest(res, errorMsg);
     }
 
+    let replyTo = undefined;
+    let contextWamid = '';
+    if (replyToMessageId) {
+      const original = await Message.findOne({
+        _id: replyToMessageId,
+        tenantId: req.tenantId,
+        conversationId: conversation._id
+      });
+      if (original) {
+        contextWamid = original.wamid || '';
+        const origOutbound =
+          original.direction === 'outbound' ||
+          original.senderType === 'agent' ||
+          original.senderType === 'bot';
+        replyTo = {
+          messageId: original._id,
+          wamid: original.wamid || '',
+          content: original.content || '',
+          messageType: original.messageType || 'text',
+          mediaUrl: original.mediaUrl || '',
+          direction: original.direction || '',
+          senderType: original.senderType || '',
+          senderName: origOutbound
+            ? original.senderType === 'bot'
+              ? 'Chatbot'
+              : 'You'
+            : contact?.name || 'Customer'
+        };
+      }
+    }
+
     const { phoneNumberId, token } = await getTenantWabaContext(req.tenantId);
 
     // Format Meta API payload
@@ -193,6 +224,9 @@ const sendTextMessage = async (req, res, next) => {
       type: 'text',
       text: { body: content }
     };
+    if (contextWamid && !String(contextWamid).startsWith('wamid.local')) {
+      metaPayload.context = { message_id: contextWamid };
+    }
 
     let metaRes;
     try {
@@ -214,6 +248,7 @@ const sendTextMessage = async (req, res, next) => {
       senderId: req.user._id,
       messageType: 'text',
       content,
+      replyTo,
       status: 'sent',
       sentAt: new Date()
     });
@@ -238,7 +273,7 @@ const sendTextMessage = async (req, res, next) => {
 
 const sendMediaMessage = async (req, res, next) => {
   try {
-    const { conversationId, caption, mediaType } = req.body;
+    const { conversationId, caption, mediaType, replyToMessageId } = req.body;
 
     if (!req.file) {
       return ApiResponse.badRequest(res, 'Please upload a media file.');
@@ -272,12 +307,44 @@ const sendMediaMessage = async (req, res, next) => {
       return ApiResponse.badRequest(res, errorMsg);
     }
 
+    let replyTo = undefined;
+    let contextWamid = '';
+    if (replyToMessageId) {
+      const original = await Message.findOne({
+        _id: replyToMessageId,
+        tenantId: req.tenantId,
+        conversationId: conversation._id
+      });
+      if (original) {
+        contextWamid = original.wamid || '';
+        const origOutbound =
+          original.direction === 'outbound' ||
+          original.senderType === 'agent' ||
+          original.senderType === 'bot';
+        replyTo = {
+          messageId: original._id,
+          wamid: original.wamid || '',
+          content: original.content || '',
+          messageType: original.messageType || 'text',
+          mediaUrl: original.mediaUrl || '',
+          direction: original.direction || '',
+          senderType: original.senderType || '',
+          senderName: origOutbound
+            ? original.senderType === 'bot'
+              ? 'Chatbot'
+              : 'You'
+            : contact?.name || 'Customer'
+        };
+      }
+    }
+
     const relativeMediaUrl = `uploads/media/${req.file.filename}`;
     const fullMediaUrl = `${env.LIVE_URL}/${relativeMediaUrl}`;
     const { phoneNumberId, token } = await getTenantWabaContext(req.tenantId);
 
     const type = mediaType || (req.file.mimetype.startsWith('image/') ? 'image' : 'document');
     const recipientPhone = contact.phone.replace(/[^\d]/g, '');
+    const trimmedCaption = typeof caption === 'string' ? caption.trim() : '';
 
     // Prefer Meta media id so Meta does not need to fetch our host
     let mediaPayload;
@@ -287,7 +354,7 @@ const sendMediaMessage = async (req, res, next) => {
         mimeType: req.file.mimetype,
         fileName: req.file.originalname
       });
-      mediaPayload = { id: mediaId, caption: caption || '' };
+      mediaPayload = { id: mediaId };
     } catch (uploadErr) {
       console.warn('[messageController] Free-form media id upload failed, using public link:', uploadErr.message);
       if (!/^https:\/\//i.test(fullMediaUrl)) {
@@ -296,7 +363,16 @@ const sendMediaMessage = async (req, res, next) => {
           `Failed to upload media to Meta and no public HTTPS URL is available: ${uploadErr.message}`
         );
       }
-      mediaPayload = { link: fullMediaUrl, caption: caption || '' };
+      mediaPayload = { link: fullMediaUrl };
+    }
+
+    // Only send caption to Meta when the agent typed one — never the file name
+    if (trimmedCaption) {
+      mediaPayload.caption = trimmedCaption;
+    }
+    // Documents can include the real filename for WhatsApp's file card (not a caption)
+    if (type === 'document' && req.file.originalname) {
+      mediaPayload.filename = req.file.originalname;
     }
 
     const metaPayload = {
@@ -306,6 +382,9 @@ const sendMediaMessage = async (req, res, next) => {
       type,
       [type]: mediaPayload
     };
+    if (contextWamid && !String(contextWamid).startsWith('wamid.local')) {
+      metaPayload.context = { message_id: contextWamid };
+    }
 
     let metaRes;
     try {
@@ -316,6 +395,18 @@ const sendMediaMessage = async (req, res, next) => {
 
     const wamid = metaRes?.messages?.[0]?.id || `wamid.local_${Date.now()}`;
 
+    const storedContent =
+      trimmedCaption ||
+      (type === 'image'
+        ? '📷 Photo'
+        : type === 'video'
+          ? '🎥 Video'
+          : type === 'audio'
+            ? '🎵 Audio'
+            : type === 'document'
+              ? req.file.originalname || '📄 Document'
+              : `[${type.toUpperCase()}]`);
+
     const message = await Message.create({
       tenantId: req.tenantId,
       conversationId: conversation._id,
@@ -325,14 +416,17 @@ const sendMediaMessage = async (req, res, next) => {
       senderType: 'agent',
       senderId: req.user._id,
       messageType: type,
-      content: caption || req.file.originalname,
+      content: storedContent,
       mediaUrl: relativeMediaUrl,
       mediaType: req.file.mimetype,
+      replyTo,
       status: 'sent',
       sentAt: new Date()
     });
 
-    conversation.lastMessageText = caption || `[${type.toUpperCase()}]`;
+    conversation.lastMessageText =
+      trimmedCaption ||
+      (type === 'image' ? '📷 Photo' : type === 'document' ? '📄 Document' : `[${type.toUpperCase()}]`);
     conversation.lastMessageAt = new Date();
     await conversation.save();
 
@@ -592,9 +686,169 @@ const sendTemplateMessage = async (req, res, next) => {
   }
 };
 
+/**
+ * Delete a message — WhatsApp-style "for me" or "for everyone".
+ * Cloud API cannot remove a delivered bubble from the customer's phone;
+ * "for everyone" soft-deletes in the inbox for all agents.
+ */
+const deleteMessage = async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const scope = String(req.body?.scope || 'me').toLowerCase() === 'everyone' ? 'everyone' : 'me';
+
+    const message = await Message.findOne({ _id: messageId, tenantId: req.tenantId });
+    if (!message) {
+      return ApiResponse.notFound(res, 'Message not found.');
+    }
+
+    if (scope === 'me') {
+      const uid = req.user._id;
+      if (!message.hiddenFor?.some((id) => String(id) === String(uid))) {
+        message.hiddenFor = [...(message.hiddenFor || []), uid];
+        await message.save();
+      }
+
+      socket.emitToTenant(req.tenantId, 'message_deleted', {
+        conversationId: message.conversationId,
+        messageId: message._id,
+        scope: 'me',
+        userId: req.user._id
+      });
+
+      return ApiResponse.success(res, 'Message deleted for you.', {
+        messageId: message._id,
+        scope: 'me'
+      });
+    }
+
+    message.deletedForEveryone = true;
+    message.deletedAt = new Date();
+    message.deletedBy = req.user._id;
+    message.content = 'This message was deleted';
+    message.mediaUrl = '';
+    message.reactions = [];
+    await message.save();
+
+    const conversation = await Conversation.findById(message.conversationId);
+    if (conversation) {
+      const lastVisible = await Message.findOne({
+        conversationId: conversation._id,
+        tenantId: req.tenantId,
+        deletedForEveryone: { $ne: true }
+      }).sort({ createdAt: -1 });
+
+      conversation.lastMessageText = lastVisible
+        ? lastVisible.content || `[${(lastVisible.messageType || 'msg').toUpperCase()}]`
+        : 'This message was deleted';
+      conversation.lastMessageAt = lastVisible?.sentAt || lastVisible?.createdAt || new Date();
+      await conversation.save();
+
+      socket.emitToTenant(req.tenantId, 'conversation_updated', {
+        conversationId: conversation._id,
+        lastMessageText: conversation.lastMessageText,
+        lastMessageAt: conversation.lastMessageAt
+      });
+    }
+
+    socket.emitToConversation(message.conversationId, 'message_updated', message);
+    socket.emitToTenant(req.tenantId, 'message_updated', {
+      conversationId: message.conversationId,
+      message
+    });
+    socket.emitToTenant(req.tenantId, 'message_deleted', {
+      conversationId: message.conversationId,
+      messageId: message._id,
+      scope: 'everyone',
+      message
+    });
+
+    return ApiResponse.success(res, 'Message deleted for everyone.', {
+      messageId: message._id,
+      scope: 'everyone',
+      message
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Add / change / remove an emoji reaction (synced to WhatsApp when possible).
+ * Send empty emoji to remove the agent's reaction.
+ */
+const reactToMessage = async (req, res, next) => {
+  try {
+    const { messageId } = req.params;
+    const emoji = req.body?.emoji != null ? String(req.body.emoji).trim() : '';
+
+    const message = await Message.findOne({ _id: messageId, tenantId: req.tenantId });
+    if (!message) {
+      return ApiResponse.notFound(res, 'Message not found.');
+    }
+    if (message.deletedForEveryone) {
+      return ApiResponse.badRequest(res, 'Cannot react to a deleted message.');
+    }
+    if (!message.wamid || String(message.wamid).startsWith('wamid.local')) {
+      return ApiResponse.badRequest(res, 'Cannot react: WhatsApp message id is missing.');
+    }
+
+    const conversation = await Conversation.findOne({
+      _id: message.conversationId,
+      tenantId: req.tenantId
+    }).populate('contactId');
+    if (!conversation?.contactId?.phone) {
+      return ApiResponse.badRequest(res, 'Conversation contact phone is missing.');
+    }
+
+    const { phoneNumberId, token } = await getTenantWabaContext(req.tenantId);
+    const recipientPhone = conversation.contactId.phone.replace(/[^\d]/g, '');
+
+    try {
+      await MetaGraphApi.sendMessage(phoneNumberId, token, {
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: recipientPhone,
+        type: 'reaction',
+        reaction: {
+          message_id: message.wamid,
+          emoji
+        }
+      });
+    } catch (metaErr) {
+      return ApiResponse.badRequest(res, `Failed to send reaction: ${metaErr.message}`);
+    }
+
+    const uid = req.user._id;
+    message.reactions = (message.reactions || []).filter(
+      (r) => !(r.actorType === 'agent' && String(r.actorId) === String(uid))
+    );
+    if (emoji) {
+      message.reactions.push({
+        emoji,
+        actorType: 'agent',
+        actorId: uid,
+        reactedAt: new Date()
+      });
+    }
+    await message.save();
+
+    socket.emitToConversation(message.conversationId, 'message_updated', message);
+    socket.emitToTenant(req.tenantId, 'message_updated', {
+      conversationId: message.conversationId,
+      message
+    });
+
+    return ApiResponse.success(res, emoji ? 'Reaction sent.' : 'Reaction removed.', message);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   sendTextMessage,
   sendMediaMessage,
   sendTemplateMessage,
-  uploadMediaAsset
+  uploadMediaAsset,
+  deleteMessage,
+  reactToMessage
 };

@@ -67,6 +67,64 @@ const messageSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.Mixed,
       default: null
     },
+    /** WhatsApp quote/reply — only set when this message is a reply */
+    replyTo: {
+      type: {
+        messageId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'Message'
+        },
+        wamid: { type: String },
+        content: { type: String },
+        messageType: { type: String },
+        mediaUrl: { type: String },
+        direction: { type: String },
+        senderType: { type: String },
+        senderName: { type: String }
+      },
+      default: undefined
+    },
+    /** Soft-delete: hide from specific agents (Delete for me) */
+    hiddenFor: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+      }
+    ],
+    /** Soft-delete for all agents + show "This message was deleted" */
+    deletedForEveryone: {
+      type: Boolean,
+      default: false
+    },
+    deletedAt: {
+      type: Date,
+      default: null
+    },
+    deletedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
+    },
+    /** WhatsApp-style emoji reactions */
+    reactions: [
+      {
+        emoji: { type: String, required: true },
+        actorType: {
+          type: String,
+          enum: ['agent', 'customer', 'bot'],
+          default: 'agent'
+        },
+        actorId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          default: null
+        },
+        reactedAt: {
+          type: Date,
+          default: Date.now
+        }
+      }
+    ],
     status: {
       type: String,
       enum: ['pending', 'sent', 'delivered', 'read', 'failed'],

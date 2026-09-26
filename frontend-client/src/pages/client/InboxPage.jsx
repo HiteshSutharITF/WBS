@@ -26,8 +26,11 @@ import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
 import {
   WhatsAppMessageBubble,
-  WhatsAppTemplatePreview
+  WhatsAppTemplatePreview,
+  ReplyQuote
 } from '../../components/inbox/WhatsAppMessageBubble';
+import ImageLightbox from '../../components/inbox/ImageLightbox';
+import { authService } from '../../services/authService';
 
 const formatRemainingWindow = (hours, minutes) => {
   if (!hours && !minutes) return 'Expired';
@@ -53,18 +56,25 @@ const InboxPage = () => {
   const [templates, setTemplates] = useState([]);
 
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
-  const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [templateParams, setTemplateParams] = useState({});
   const [headerMediaUrl, setHeaderMediaUrl] = useState('');
   const [headerText, setHeaderText] = useState('');
   const [uploadingHeaderMedia, setUploadingHeaderMedia] = useState(false);
   const headerFileInputRef = useRef(null);
+  const mediaFileInputRef = useRef(null);
   const [mediaFile, setMediaFile] = useState(null);
+  const [mediaPreviewUrl, setMediaPreviewUrl] = useState('');
   const [mediaCaption, setMediaCaption] = useState('');
+  const [isMediaComposerOpen, setIsMediaComposerOpen] = useState(false);
   const [isNoteDrawerOpen, setIsNoteDrawerOpen] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const [replyToMsg, setReplyToMsg] = useState(null);
+  const [lightboxSrc, setLightboxSrc] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deletingMsg, setDeletingMsg] = useState(false);
+  const currentUser = authService.getCurrentUser();
 
   const messagesEndRef = useRef(null);
 
@@ -112,6 +122,7 @@ const InboxPage = () => {
   useEffect(() => {
     if (activeConvId) {
       setActiveData(null);
+      setReplyToMsg(null);
       loadActiveChat(activeConvId);
     }
   }, [activeConvId]);
@@ -173,6 +184,10 @@ const InboxPage = () => {
           };
         });
         setTimeout(scrollToBottom, 100);
+        // Customer is messaging while agent is viewing → send WhatsApp "seen"
+        if (isInbound) {
+          chatService.markConversationRead(msgConvId).catch(() => {});
+        }
       }
 
       setConversations((prev) => {
@@ -214,6 +229,49 @@ const InboxPage = () => {
       });
     };
 
+    const handleMessageUpdated = (payload) => {
+      const message = payload?.message || payload;
+      if (!message?._id) return;
+      const convId = payload?.conversationId || message.conversationId;
+      if (!sameId(activeConvId, convId)) return;
+      setActiveData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          messages: prev.messages.map((m) => (sameId(m._id, message._id) ? { ...m, ...message } : m))
+        };
+      });
+    };
+
+    const handleMessageDeleted = (payload = {}) => {
+      const { messageId, scope, userId, message, conversationId } = payload;
+      if (!messageId) return;
+      if (conversationId && !sameId(activeConvId, conversationId)) return;
+
+      if (scope === 'me') {
+        const me = authService.getCurrentUser();
+        if (userId && me && !sameId(me._id || me.id, userId)) return;
+        setActiveData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.filter((m) => !sameId(m._id, messageId))
+          };
+        });
+        return;
+      }
+
+      if (message) {
+        setActiveData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.map((m) => (sameId(m._id, messageId) ? { ...m, ...message } : m))
+          };
+        });
+      }
+    };
+
     const handleConvUpdated = (payload = {}) => {
       if (!payload?.conversationId) {
         fetchConversations();
@@ -241,12 +299,16 @@ const InboxPage = () => {
     socket.on('new_message', handleNewMessage);
     socket.on('conversation_message', handleNewMessage);
     socket.on('message_status_updated', handleStatusUpdate);
+    socket.on('message_updated', handleMessageUpdated);
+    socket.on('message_deleted', handleMessageDeleted);
     socket.on('conversation_updated', handleConvUpdated);
 
     return () => {
       socket.off('new_message', handleNewMessage);
       socket.off('conversation_message', handleNewMessage);
       socket.off('message_status_updated', handleStatusUpdate);
+      socket.off('message_updated', handleMessageUpdated);
+      socket.off('message_deleted', handleMessageDeleted);
       socket.off('conversation_updated', handleConvUpdated);
     };
   }, [activeConvId]);
@@ -270,8 +332,11 @@ const InboxPage = () => {
     if (!textInput.trim() || sending) return;
     setSending(true);
     try {
-      await chatService.sendTextMessage(activeConvId, textInput.trim());
+      await chatService.sendTextMessage(activeConvId, textInput.trim(), {
+        ...(replyToMsg?._id ? { replyToMessageId: replyToMsg._id } : {})
+      });
       setTextInput('');
+      setReplyToMsg(null);
       scrollToBottom();
     } catch (err) {
       alert(err.message);
@@ -353,6 +418,41 @@ const InboxPage = () => {
     }
   };
 
+  const closeMediaComposer = () => {
+    setIsMediaComposerOpen(false);
+    setMediaFile(null);
+    setMediaCaption('');
+    if (mediaPreviewUrl) {
+      URL.revokeObjectURL(mediaPreviewUrl);
+      setMediaPreviewUrl('');
+    }
+    if (mediaFileInputRef.current) mediaFileInputRef.current.value = '';
+  };
+
+  useEffect(() => {
+    if (!isMediaComposerOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') closeMediaComposer();
+    };
+    window.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [isMediaComposerOpen, mediaPreviewUrl]);
+
+  const handleMediaFilePick = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (mediaPreviewUrl) URL.revokeObjectURL(mediaPreviewUrl);
+    setMediaFile(file);
+    setMediaCaption('');
+    setMediaPreviewUrl(URL.createObjectURL(file));
+    setIsMediaComposerOpen(true);
+  };
+
   const handleSendMedia = async () => {
     if (!mediaFile) return;
     setSending(true);
@@ -360,11 +460,12 @@ const InboxPage = () => {
       const formData = new FormData();
       formData.append('conversationId', activeConvId);
       formData.append('file', mediaFile);
-      formData.append('caption', mediaCaption);
+      const caption = mediaCaption.trim();
+      if (caption) formData.append('caption', caption);
+      if (replyToMsg?._id) formData.append('replyToMessageId', replyToMsg._id);
       await chatService.sendMediaMessage(formData);
-      setIsMediaModalOpen(false);
-      setMediaFile(null);
-      setMediaCaption('');
+      closeMediaComposer();
+      setReplyToMsg(null);
       loadActiveChat(activeConvId);
     } catch (err) {
       alert(err.message);
@@ -422,6 +523,82 @@ const InboxPage = () => {
   const activeConv = activeData?.conversation;
   const isWindowOpen = activeConv?.isWindowOpen;
   const canFreeform = isWindowOpen && activeConv?.hasCustomerMessaged;
+  const contactName = activeConv?.contactId?.name || 'Customer';
+
+  const jumpToQuotedMessage = (replyTo) => {
+    if (!replyTo) return;
+    const byId = replyTo.messageId ? document.getElementById(`wa-msg-${replyTo.messageId}`) : null;
+    const byWamid =
+      !byId && replyTo.wamid
+        ? document.querySelector(`.wa-msg-row[data-wamid="${CSS.escape(String(replyTo.wamid))}"]`)
+        : null;
+    const el = byId || byWamid;
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.remove('wa-msg-flash');
+    void el.offsetWidth;
+    el.classList.add('wa-msg-flash');
+    window.setTimeout(() => el.classList.remove('wa-msg-flash'), 1400);
+  };
+
+  const handleReactToMessage = async (msg, emoji) => {
+    if (!msg?._id) return;
+    try {
+      const res = await chatService.reactToMessage(msg._id, emoji);
+      const updated = res?.data;
+      if (updated?._id) {
+        setActiveData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.map((m) => (String(m._id) === String(updated._id) ? { ...m, ...updated } : m))
+          };
+        });
+      }
+    } catch (err) {
+      alert(err.message || 'Failed to send reaction');
+    }
+  };
+
+  const handleConfirmDelete = async (scope) => {
+    if (!deleteTarget?._id) return;
+    setDeletingMsg(true);
+    try {
+      await chatService.deleteMessage(deleteTarget._id, scope);
+      if (scope === 'me') {
+        setActiveData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.filter((m) => String(m._id) !== String(deleteTarget._id))
+          };
+        });
+      } else {
+        setActiveData((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.map((m) =>
+              String(m._id) === String(deleteTarget._id)
+                ? {
+                    ...m,
+                    deletedForEveryone: true,
+                    content: 'This message was deleted',
+                    mediaUrl: '',
+                    reactions: []
+                  }
+                : m
+            )
+          };
+        });
+      }
+      setDeleteTarget(null);
+    } catch (err) {
+      alert(err.message || 'Failed to delete message');
+    } finally {
+      setDeletingMsg(false);
+    }
+  };
 
   return (
     <div className="wa-inbox h-full w-full flex overflow-hidden bg-[#111b21]">
@@ -646,7 +823,21 @@ const InboxPage = () => {
                 <RefreshCw className="w-6 h-6 animate-spin text-[#667781]" />
               </div>
             ) : (
-              activeData?.messages?.map((msg) => <WhatsAppMessageBubble key={msg._id} msg={msg} />)
+              activeData?.messages?.map((msg) => (
+                <WhatsAppMessageBubble
+                  key={msg._id}
+                  msg={msg}
+                  canReply={!!canFreeform}
+                  contactName={contactName}
+                  messages={activeData.messages}
+                  onJumpToReply={jumpToQuotedMessage}
+                  onReply={(m) => setReplyToMsg(m)}
+                  onReact={handleReactToMessage}
+                  onDelete={(m) => setDeleteTarget(m)}
+                  onPreviewImage={(src) => setLightboxSrc(src)}
+                  currentUserId={currentUser?._id || currentUser?.id}
+                />
+              ))
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -654,46 +845,91 @@ const InboxPage = () => {
           {/* Composer */}
           <div className="bg-[#f0f2f5] px-2 py-2.5 shrink-0">
             {canFreeform ? (
-              <form onSubmit={handleSendText} className="flex items-end gap-2">
-                <button
-                  type="button"
-                  className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full"
-                  title="Emoji"
-                >
-                  <Smile className="w-6 h-6" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsMediaModalOpen(true)}
-                  className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full"
-                  title="Attach"
-                >
-                  <Paperclip className="w-6 h-6" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsTemplateModalOpen(true)}
-                  className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full sm:hidden"
-                  title="Template"
-                >
-                  <FileText className="w-6 h-6" />
-                </button>
-                <input
-                  type="text"
-                  placeholder="Type a message"
-                  value={textInput}
-                  onChange={(e) => setTextInput(e.target.value)}
-                  className="wa-composer-input"
-                />
-                <button
-                  type="submit"
-                  disabled={!textInput.trim() || sending}
-                  className="wa-send-btn"
-                  aria-label="Send"
-                >
-                  <Send className="w-5 h-5" />
-                </button>
-              </form>
+              <>
+                {replyToMsg && (
+                  <div className="wa-reply-composer mb-2 mx-1">
+                    <div className="wa-reply-composer-inner min-w-0 flex-1">
+                      <ReplyQuote
+                        replyTo={{
+                          content: replyToMsg.content,
+                          messageType: replyToMsg.messageType,
+                          mediaUrl: replyToMsg.mediaUrl,
+                          direction: replyToMsg.direction,
+                          senderType: replyToMsg.senderType,
+                          wamid: replyToMsg.wamid,
+                          messageId: replyToMsg._id,
+                          senderName:
+                            replyToMsg.direction === 'outbound' ||
+                            replyToMsg.senderType === 'agent' ||
+                            replyToMsg.senderType === 'bot'
+                              ? replyToMsg.senderType === 'bot'
+                                ? 'Chatbot'
+                                : 'You'
+                              : contactName
+                        }}
+                        contactName={contactName}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setReplyToMsg(null)}
+                      className="p-1.5 text-[#54656f] hover:text-[#111b21] rounded-full shrink-0"
+                      title="Cancel reply"
+                      aria-label="Cancel reply"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                )}
+                <form onSubmit={handleSendText} className="flex items-end gap-2">
+                  <button
+                    type="button"
+                    className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full"
+                    title="Emoji"
+                  >
+                    <Smile className="w-6 h-6" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => mediaFileInputRef.current?.click()}
+                    className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full"
+                    title="Attach"
+                  >
+                    <Paperclip className="w-6 h-6" />
+                  </button>
+                  <input
+                    ref={mediaFileInputRef}
+                    type="file"
+                    accept="image/*,application/pdf,video/*"
+                    className="hidden"
+                    onChange={handleMediaFilePick}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setIsTemplateModalOpen(true)}
+                    className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full sm:hidden"
+                    title="Template"
+                  >
+                    <FileText className="w-6 h-6" />
+                  </button>
+                  <input
+                    type="text"
+                    placeholder={replyToMsg ? 'Type a reply' : 'Type a message'}
+                    value={textInput}
+                    onChange={(e) => setTextInput(e.target.value)}
+                    className="wa-composer-input"
+                    autoFocus={!!replyToMsg}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!textInput.trim() || sending}
+                    className="wa-send-btn"
+                    aria-label="Send"
+                  >
+                    <Send className="w-5 h-5" />
+                  </button>
+                </form>
+              </>
             ) : (
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 px-2">
                 <div className="flex-1 flex items-start gap-2 bg-[#fff3cd] text-[#664d03] rounded-lg px-3 py-2.5 text-[13px]">
@@ -1070,43 +1306,115 @@ const InboxPage = () => {
         </div>
       </Modal>
 
-      {/* Media modal */}
-      <Modal
-        isOpen={isMediaModalOpen}
-        onClose={() => setIsMediaModalOpen(false)}
-        title="Send photo or document"
-        footer={
-          <>
-            <Button variant="secondary" onClick={() => setIsMediaModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="whatsapp"
-              onClick={handleSendMedia}
-              disabled={!mediaFile || sending}
-              isLoading={sending}
+      {/* WhatsApp-style media composer: preview → caption → send */}
+      {isMediaComposerOpen && mediaFile && (
+        <div className="wa-media-composer" role="dialog" aria-modal="true" aria-label="Send media">
+          <div className="wa-media-composer-top">
+            <button
+              type="button"
+              onClick={closeMediaComposer}
+              className="wa-media-composer-close"
+              title="Close"
+              aria-label="Close"
             >
-              Send
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-4">
-          <input
-            type="file"
-            accept="image/*,application/pdf"
-            onChange={(e) => setMediaFile(e.target.files[0])}
-            className="w-full text-xs text-[#54656f] file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-[#e7fce3] file:text-[#008069]"
-          />
-          <input
-            type="text"
-            placeholder="Add a caption..."
-            value={mediaCaption}
-            onChange={(e) => setMediaCaption(e.target.value)}
-            className="w-full px-3 py-2 text-sm bg-[#f0f2f5] rounded-lg outline-none"
-          />
+              <X className="w-6 h-6" />
+            </button>
+            <p className="wa-media-composer-title">
+              {mediaFile.type?.startsWith('image/')
+                ? 'Send photo'
+                : mediaFile.type?.startsWith('video/')
+                  ? 'Send video'
+                  : 'Send document'}
+            </p>
+          </div>
+
+          <div className="wa-media-composer-stage">
+            {mediaFile.type?.startsWith('image/') && mediaPreviewUrl ? (
+              <img src={mediaPreviewUrl} alt="" className="wa-media-composer-preview-img" />
+            ) : mediaFile.type?.startsWith('video/') && mediaPreviewUrl ? (
+              <video src={mediaPreviewUrl} className="wa-media-composer-preview-img" controls />
+            ) : (
+              <div className="wa-media-composer-doc">
+                <FileText className="w-16 h-16 text-[#ea0038]" />
+                <p className="mt-3 text-[15px] text-white/90 font-medium truncate max-w-[80vw]">
+                  {mediaFile.name}
+                </p>
+                <p className="text-[12px] text-white/50 mt-1">
+                  {mediaFile.type || 'Document'}
+                  {mediaFile.size ? ` · ${Math.max(1, Math.round(mediaFile.size / 1024))} KB` : ''}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="wa-media-composer-bottom">
+            <input
+              type="text"
+              placeholder="Add a caption…"
+              value={mediaCaption}
+              onChange={(e) => setMediaCaption(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMedia();
+                }
+              }}
+              className="wa-media-composer-caption"
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={handleSendMedia}
+              disabled={sending}
+              className="wa-media-composer-send"
+              aria-label="Send"
+              title="Send"
+            >
+              {sending ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+            </button>
+          </div>
         </div>
-      </Modal>
+      )}
+
+      {lightboxSrc ? <ImageLightbox src={lightboxSrc} onClose={() => setLightboxSrc('')} /> : null}
+
+      {deleteTarget && (
+        <div className="wa-delete-overlay" role="dialog" aria-modal="true" aria-label="Delete message">
+          <div className="wa-delete-card">
+            <h3 className="wa-delete-title">Delete message?</h3>
+            <p className="wa-delete-sub">
+              Choose how you want to delete this message. Delete for everyone removes it from this inbox for all
+              agents.
+            </p>
+            <div className="wa-delete-actions">
+              <button
+                type="button"
+                className="wa-delete-btn wa-delete-everyone"
+                disabled={deletingMsg}
+                onClick={() => handleConfirmDelete('everyone')}
+              >
+                Delete for everyone
+              </button>
+              <button
+                type="button"
+                className="wa-delete-btn wa-delete-me"
+                disabled={deletingMsg}
+                onClick={() => handleConfirmDelete('me')}
+              >
+                Delete for me
+              </button>
+              <button
+                type="button"
+                className="wa-delete-btn wa-delete-cancel"
+                disabled={deletingMsg}
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -9,6 +9,7 @@ router.use(requireTenant);
 
 router.get('/', chatController.listConversations);
 router.get('/:conversationId', chatController.getConversation);
+router.post('/:conversationId/mark-read', chatController.markConversationRead);
 router.put('/:conversationId/assign', chatController.assignAgent);
 router.put('/:conversationId/toggle-bot', chatController.toggleBotPause);
 router.put('/:conversationId/status', chatController.updateStatus);
