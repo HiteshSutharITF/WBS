@@ -392,6 +392,71 @@ class MetaGraphApi {
   }
 
   /**
+   * Download inbound WhatsApp media by media id and return binary + metadata.
+   * Step 1: GET /{media-id} → temporary download URL
+   * Step 2: GET url with Bearer token → binary
+   */
+  static async downloadMediaById(mediaId, token) {
+    if (!mediaId) {
+      throw new Error('mediaId is required to download WhatsApp media.');
+    }
+    if (!token || token.startsWith('mock_')) {
+      if (env.ENABLE_MOCK_FALLBACK) {
+        return {
+          buffer: Buffer.from(''),
+          mimeType: 'image/jpeg',
+          fileName: `mock_${mediaId}.jpg`
+        };
+      }
+      throw new Error('Meta API token is required to download inbound media.');
+    }
+
+    try {
+      const metaRes = await metaClient.get(`/${mediaId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const downloadUrl = metaRes.data?.url;
+      const mimeType = metaRes.data?.mime_type || 'application/octet-stream';
+      if (!downloadUrl) {
+        throw new Error('Meta did not return a media download URL.');
+      }
+
+      const binRes = await axios.get(downloadUrl, {
+        responseType: 'arraybuffer',
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 60000,
+        maxContentLength: 64 * 1024 * 1024
+      });
+
+      const extMap = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+        'image/gif': 'gif',
+        'video/mp4': 'mp4',
+        'video/3gpp': '3gp',
+        'audio/ogg': 'ogg',
+        'audio/mpeg': 'mp3',
+        'audio/aac': 'aac',
+        'application/pdf': 'pdf'
+      };
+      const ext = extMap[mimeType] || 'bin';
+
+      return {
+        buffer: Buffer.from(binRes.data),
+        mimeType,
+        fileName: `${mediaId}.${ext}`,
+        metaMediaId: mediaId
+      };
+    } catch (error) {
+      const errData = error.response?.data?.error;
+      const errorMsg = errData ? `[Meta ${errData.code}] ${errData.message}` : error.message;
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
    * Upload media for messaging (template headers / image messages).
    * POST /{phone-number-id}/media → returns media id usable as image.id / video.id / document.id
    * Prefer this over public link URLs — Meta does not need to fetch your server.

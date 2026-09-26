@@ -1,9 +1,44 @@
 const env = require('../config/env');
+const fs = require('fs');
+const path = require('path');
 const { verifyWebhookSignature } = require('../utils/webhookSignature');
 const { WabaAccount, Tenant, Contact, Conversation, Message, ChatbotRule, Template } = require('../models/zindex');
 const cryptoUtils = require('../utils/cryptoUtils');
 const MetaGraphApi = require('../utils/metaGraphApi');
 const socket = require('../config/socket');
+
+const INBOUND_MEDIA_DIR = path.join(__dirname, '..', 'uploads', 'inbound');
+
+const ensureInboundMediaDir = () => {
+  if (!fs.existsSync(INBOUND_MEDIA_DIR)) {
+    fs.mkdirSync(INBOUND_MEDIA_DIR, { recursive: true });
+  }
+};
+
+/**
+ * Download Meta media id to local /uploads/inbound and return relative path + mime.
+ */
+const storeInboundMedia = async (mediaId, token, messageType) => {
+  if (!mediaId || !token) return { mediaUrl: '', mediaType: '' };
+  try {
+    ensureInboundMediaDir();
+    const downloaded = await MetaGraphApi.downloadMediaById(mediaId, token);
+    if (!downloaded?.buffer?.length) {
+      return { mediaUrl: '', mediaType: downloaded?.mimeType || '' };
+    }
+    const safeName = `${Date.now()}_${String(mediaId).slice(-12)}_${downloaded.fileName || `${messageType}.bin`}`
+      .replace(/[^a-zA-Z0-9._-]/g, '_');
+    const absolute = path.join(INBOUND_MEDIA_DIR, safeName);
+    fs.writeFileSync(absolute, downloaded.buffer);
+    return {
+      mediaUrl: `/uploads/inbound/${safeName}`,
+      mediaType: downloaded.mimeType || ''
+    };
+  } catch (err) {
+    console.warn(`[Webhook] Failed to download inbound ${messageType} media ${mediaId}:`, err.message);
+    return { mediaUrl: '', mediaType: '' };
+  }
+};
 
 /**
  * Meta Webhook Verification Handshake (GET)
@@ -155,7 +190,8 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
       status: 'open',
       lastCustomerMessageAt: new Date(),
       lastMessageAt: new Date(),
-      lastMessageText: ''
+      lastMessageText: '',
+      unreadCount: 1
     });
   } else {
     conversation.lastCustomerMessageAt = new Date(); // Reset 24-hour service window
@@ -165,17 +201,31 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
     await conversation.save();
   }
 
-  // 3. Extract content & type
+  // 3. Extract content & type — download inbound media to local disk for inbox preview
   let content = '';
   let messageType = 'text';
   let mediaUrl = '';
+  let mediaType = '';
 
   if (msg.type === 'text') {
     content = msg.text?.body || '';
-  } else if (['image', 'document', 'audio', 'video'].includes(msg.type)) {
-    messageType = msg.type;
-    content = msg[msg.type]?.caption || `[${msg.type.toUpperCase()}]`;
-    mediaUrl = msg[msg.type]?.id || '';
+  } else if (['image', 'document', 'audio', 'video', 'sticker'].includes(msg.type)) {
+    messageType = msg.type === 'sticker' ? 'image' : msg.type;
+    content = msg[msg.type]?.caption || (msg.type === 'sticker' ? '' : `[${msg.type.toUpperCase()}]`);
+    const metaMediaId = msg[msg.type]?.id || '';
+    if (metaMediaId) {
+      const token = cryptoUtils.decrypt(waba.encryptedToken);
+      const stored = await storeInboundMedia(metaMediaId, token, messageType);
+      mediaUrl = stored.mediaUrl;
+      mediaType = stored.mediaType;
+      // Keep a useful list preview even when download fails
+      if (!content || content.startsWith('[')) {
+        if (messageType === 'image') content = mediaUrl ? '📷 Photo' : '[IMAGE]';
+        else if (messageType === 'video') content = mediaUrl ? '🎥 Video' : '[VIDEO]';
+        else if (messageType === 'document') content = mediaUrl ? '📄 Document' : '[DOCUMENT]';
+        else if (messageType === 'audio') content = mediaUrl ? '🎵 Audio' : '[AUDIO]';
+      }
+    }
   } else if (msg.type === 'interactive') {
     messageType = 'interactive';
     content = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || 'Interactive response';
@@ -194,6 +244,7 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
     messageType,
     content,
     mediaUrl,
+    mediaType: mediaType || undefined,
     status: 'delivered',
     sentAt: new Date(parseInt(msg.timestamp) * 1000 || Date.now())
   });
@@ -214,6 +265,7 @@ async function processIncomingMessage(msg, metaContacts, waba, tenant) {
   socket.emitToTenant(tenant._id, 'conversation_updated', {
     conversationId: conversation._id,
     status: conversation.status,
+    unreadCount: conversation.unreadCount,
     isWindowOpen: true,
     hasCustomerMessaged: true,
     sessionStatus: 'ACTIVE',

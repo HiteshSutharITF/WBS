@@ -4,22 +4,16 @@ import {
   Send,
   Paperclip,
   Clock,
-  UserCheck,
   Bot,
-  Check,
-  CheckCheck,
-  AlertCircle,
   FileText,
   Image as ImageIcon,
-  User,
-  Phone,
-  Tag,
   StickyNote,
-  ChevronRight,
   RefreshCw,
-  Plus,
   UploadCloud,
-  Sparkles
+  Smile,
+  MoreVertical,
+  MessageSquarePlus,
+  X
 } from 'lucide-react';
 import { chatService } from '../../services/chatService';
 import { contactService } from '../../services/contactService';
@@ -30,22 +24,25 @@ import { formatTime, formatDate, getMediaUrl, isUsableMediaRef } from '../../uti
 import Button from '../../components/common/Button';
 import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
-import Alert from '../../components/common/Alert';
+import {
+  WhatsAppMessageBubble,
+  WhatsAppTemplatePreview
+} from '../../components/inbox/WhatsAppMessageBubble';
 
 const formatRemainingWindow = (hours, minutes) => {
   if (!hours && !minutes) return 'Expired';
   const h = Math.floor(hours || 0);
   const m = Math.round((minutes || 0) % 60);
-  if (h > 0) {
-    return `${h}h ${m}m left`;
-  }
+  if (h > 0) return `${h}h ${m}m left`;
   return `${m}m left`;
 };
+
+const contactInitial = (name) => (name?.[0] || '?').toUpperCase();
 
 const InboxPage = () => {
   const [conversations, setConversations] = useState([]);
   const [activeConvId, setActiveConvId] = useState(null);
-  const [activeData, setActiveData] = useState(null); // { conversation, messages }
+  const [activeData, setActiveData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [chatLoading, setChatLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
@@ -55,7 +52,6 @@ const InboxPage = () => {
   const [teamMembers, setTeamMembers] = useState([]);
   const [templates, setTemplates] = useState([]);
 
-  // Modals
   const [isTemplateModalOpen, setIsTemplateModalOpen] = useState(false);
   const [isMediaModalOpen, setIsMediaModalOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
@@ -68,6 +64,7 @@ const InboxPage = () => {
   const [mediaCaption, setMediaCaption] = useState('');
   const [isNoteDrawerOpen, setIsNoteDrawerOpen] = useState(false);
   const [newNoteText, setNewNoteText] = useState('');
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
 
   const messagesEndRef = useRef(null);
 
@@ -75,7 +72,6 @@ const InboxPage = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // 1. Fetch Conversations
   const fetchConversations = async () => {
     try {
       const res = await chatService.listConversations({ status: statusFilter, search: searchTerm });
@@ -94,13 +90,11 @@ const InboxPage = () => {
     fetchConversations();
   }, [statusFilter, searchTerm]);
 
-  // 2. Fetch Team and Templates for pickers
   useEffect(() => {
     userService.listTeamMembers().then((res) => setTeamMembers(res.data || [])).catch(() => {});
     templateService.listTemplates({ status: 'APPROVED' }).then((res) => setTemplates(res.data || [])).catch(() => {});
   }, []);
 
-  // 3. Load Active Conversation
   const loadActiveChat = async (id) => {
     if (!id) return;
     setChatLoading(true);
@@ -117,25 +111,51 @@ const InboxPage = () => {
 
   useEffect(() => {
     if (activeConvId) {
+      setActiveData(null);
       loadActiveChat(activeConvId);
     }
   }, [activeConvId]);
 
-  // 4. Socket Real-Time Listeners
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
 
-    const handleNewMessage = (newMsg) => {
-      // If belongs to currently viewed conversation, append to thread
-      const isInbound = newMsg.direction === 'inbound';
+    const sameId = (a, b) => a != null && b != null && String(a) === String(b);
 
-      // If belongs to currently viewed conversation, append to thread and open window if inbound
-      if (activeConvId && newMsg.conversationId === activeConvId) {
+    const resolveMessagePayload = (payload) => {
+      if (!payload) return { message: null, conversationId: null };
+      if (payload.message) {
+        return {
+          message: payload.message,
+          conversationId: payload.conversationId || payload.message.conversationId
+        };
+      }
+      return { message: payload, conversationId: payload.conversationId };
+    };
+
+    const handleNewMessage = (payload) => {
+      const { message: newMsg, conversationId: rawConvId } = resolveMessagePayload(payload);
+      if (!newMsg) return;
+
+      const msgConvId = rawConvId || newMsg.conversationId;
+      if (!msgConvId) return;
+
+      const isInbound = newMsg.direction === 'inbound';
+      const isActiveChat = sameId(activeConvId, msgConvId);
+
+      // Only append into the currently open thread (never mix chats)
+      if (isActiveChat) {
         setActiveData((prev) => {
           if (!prev) return prev;
-          const exists = prev.messages.some((m) => m._id === newMsg._id || (m.wamid && m.wamid === newMsg.wamid));
-          const updatedMessages = exists ? prev.messages : [...prev.messages, newMsg];
+          if (prev.conversation && !sameId(prev.conversation._id, msgConvId)) {
+            return prev;
+          }
+          const exists = prev.messages.some(
+            (m) =>
+              sameId(m._id, newMsg._id) ||
+              (m.wamid && newMsg.wamid && m.wamid === newMsg.wamid)
+          );
+          if (exists) return prev;
           return {
             ...prev,
             conversation: isInbound
@@ -145,54 +165,81 @@ const InboxPage = () => {
                   hasCustomerMessaged: true,
                   sessionStatus: 'ACTIVE',
                   windowExpiresInHours: 24,
-                  windowExpiresInMinutes: 1440
+                  windowExpiresInMinutes: 1440,
+                  unreadCount: 0
                 }
               : prev.conversation,
-            messages: updatedMessages
+            messages: [...prev.messages, newMsg]
           };
         });
         setTimeout(scrollToBottom, 100);
       }
 
-      // Update conversations list preview
+      setConversations((prev) => {
+        let found = false;
+        const next = prev.map((c) => {
+          if (!sameId(c._id, msgConvId)) return c;
+          found = true;
+          return {
+            ...c,
+            lastMessageText: newMsg.content || `[${(newMsg.messageType || 'msg').toUpperCase()}]`,
+            lastMessageAt: newMsg.createdAt || newMsg.sentAt || new Date().toISOString(),
+            unreadCount: isInbound
+              ? isActiveChat
+                ? 0
+                : (c.unreadCount || 0) + 1
+              : c.unreadCount || 0,
+            isWindowOpen: isInbound ? true : c.isWindowOpen,
+            hasCustomerMessaged: isInbound ? true : c.hasCustomerMessaged,
+            sessionStatus: isInbound ? 'ACTIVE' : c.sessionStatus,
+            windowExpiresInHours: isInbound ? 24 : c.windowExpiresInHours
+          };
+        });
+        if (!found) return next;
+        return [...next].sort(
+          (a, b) => new Date(b.lastMessageAt || 0).getTime() - new Date(a.lastMessageAt || 0).getTime()
+        );
+      });
+    };
+
+    const handleStatusUpdate = ({ messageId, status, errorCode, errorMessage }) => {
+      setActiveData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          messages: prev.messages.map((m) =>
+            sameId(m._id, messageId) ? { ...m, status, errorCode, errorMessage } : m
+          )
+        };
+      });
+    };
+
+    const handleConvUpdated = (payload = {}) => {
+      if (!payload?.conversationId) {
+        fetchConversations();
+        return;
+      }
       setConversations((prev) =>
         prev.map((c) => {
-          if (c._id === newMsg.conversationId) {
-            return {
-              ...c,
-              lastMessageText: newMsg.content || `[${newMsg.messageType.toUpperCase()}]`,
-              lastMessageAt: newMsg.createdAt,
-              isWindowOpen: isInbound ? true : c.isWindowOpen,
-              hasCustomerMessaged: isInbound ? true : c.hasCustomerMessaged,
-              sessionStatus: isInbound ? 'ACTIVE' : c.sessionStatus,
-              windowExpiresInHours: isInbound ? 24 : c.windowExpiresInHours
-            };
-          }
-          return c;
+          if (!sameId(c._id, payload.conversationId)) return c;
+          const patch = { ...c };
+          if ('status' in payload) patch.status = payload.status;
+          if ('unreadCount' in payload) patch.unreadCount = payload.unreadCount;
+          if ('lastMessageText' in payload) patch.lastMessageText = payload.lastMessageText;
+          if ('lastMessageAt' in payload) patch.lastMessageAt = payload.lastMessageAt;
+          if ('isWindowOpen' in payload) patch.isWindowOpen = payload.isWindowOpen;
+          if ('hasCustomerMessaged' in payload) patch.hasCustomerMessaged = payload.hasCustomerMessaged;
+          if ('sessionStatus' in payload) patch.sessionStatus = payload.sessionStatus;
+          if ('windowExpiresInHours' in payload) patch.windowExpiresInHours = payload.windowExpiresInHours;
+          // Viewing this chat → keep unread cleared
+          if (sameId(activeConvId, payload.conversationId)) patch.unreadCount = 0;
+          return patch;
         })
       );
     };
 
-    const handleStatusUpdate = ({ messageId, status, errorCode, errorMessage }) => {
-      if (activeData?.messages) {
-        setActiveData((prev) => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-      messages: prev.messages.map((m) =>
-            String(m._id) === String(messageId) ? { ...m, status, errorCode, errorMessage } : m
-          )
-          };
-        });
-      }
-    };
-
-    const handleConvUpdated = () => {
-      fetchConversations();
-    };
-
     socket.on('new_message', handleNewMessage);
-    socket.on('conversation_message', (payload) => handleNewMessage(payload.message));
+    socket.on('conversation_message', handleNewMessage);
     socket.on('message_status_updated', handleStatusUpdate);
     socket.on('conversation_updated', handleConvUpdated);
 
@@ -202,13 +249,25 @@ const InboxPage = () => {
       socket.off('message_status_updated', handleStatusUpdate);
       socket.off('conversation_updated', handleConvUpdated);
     };
-  }, [activeConvId, activeData]);
+  }, [activeConvId]);
 
-  // Send Text Message
+  // Join / leave conversation rooms when switching chats
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket || !activeConvId) return;
+    const id = String(activeConvId);
+    socket.emit('join_conversation', id);
+    setConversations((prev) =>
+      prev.map((c) => (String(c._id) === id ? { ...c, unreadCount: 0 } : c))
+    );
+    return () => {
+      socket.emit('leave_conversation', id);
+    };
+  }, [activeConvId]);
+
   const handleSendText = async (e) => {
     e?.preventDefault();
     if (!textInput.trim() || sending) return;
-
     setSending(true);
     try {
       await chatService.sendTextMessage(activeConvId, textInput.trim());
@@ -221,7 +280,6 @@ const InboxPage = () => {
     }
   };
 
-  // Upload Header Media for Template
   const handleHeaderFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -230,9 +288,7 @@ const InboxPage = () => {
       const formData = new FormData();
       formData.append('file', file);
       const res = await chatService.uploadMediaAsset(formData);
-      if (res.data?.url) {
-        setHeaderMediaUrl(res.data.url);
-      }
+      if (res.data?.url) setHeaderMediaUrl(res.data.url);
     } catch (err) {
       alert('Failed to upload header media: ' + (err.response?.data?.message || err.message));
     } finally {
@@ -240,14 +296,13 @@ const InboxPage = () => {
     }
   };
 
-  // Send Template Message
   const handleSendTemplate = async () => {
     if (!selectedTemplate) return;
 
     const headerFormat = selectedTemplate.header?.format;
     if (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(headerFormat) && !isUsableMediaRef(headerMediaUrl)) {
       alert(
-        `This template requires a ${headerFormat.toLowerCase()} header. Upload a file or paste a public HTTPS URL. Meta sample handles cannot be used when sending.`
+        `This template requires a ${headerFormat.toLowerCase()} header. Upload a file or paste a public HTTPS URL.`
       );
       return;
     }
@@ -298,7 +353,6 @@ const InboxPage = () => {
     }
   };
 
-  // Send Media Message
   const handleSendMedia = async () => {
     if (!mediaFile) return;
     setSending(true);
@@ -307,7 +361,6 @@ const InboxPage = () => {
       formData.append('conversationId', activeConvId);
       formData.append('file', mediaFile);
       formData.append('caption', mediaCaption);
-
       await chatService.sendMediaMessage(formData);
       setIsMediaModalOpen(false);
       setMediaFile(null);
@@ -320,7 +373,6 @@ const InboxPage = () => {
     }
   };
 
-  // Toggle Bot Pause (Human Hand-off)
   const handleToggleBot = async () => {
     try {
       const res = await chatService.toggleBotPause(activeConvId);
@@ -335,7 +387,6 @@ const InboxPage = () => {
     }
   };
 
-  // Assign Agent
   const handleAssignAgent = async (agentId) => {
     try {
       await chatService.assignAgent(activeConvId, agentId);
@@ -350,7 +401,6 @@ const InboxPage = () => {
     }
   };
 
-  // Add Note
   const handleAddNote = async (e) => {
     e.preventDefault();
     if (!newNoteText.trim() || !activeData?.conversation?.contactId?._id) return;
@@ -371,31 +421,60 @@ const InboxPage = () => {
 
   const activeConv = activeData?.conversation;
   const isWindowOpen = activeConv?.isWindowOpen;
+  const canFreeform = isWindowOpen && activeConv?.hasCustomerMessaged;
 
   return (
-    <div className="h-[calc(100vh-8.5rem)] bg-white rounded-2xl border border-slate-200/80 shadow-xs flex overflow-hidden">
-      {/* 1. Left Conversation List Panel */}
-      <div className="w-80 md:w-96 border-r border-slate-200/80 flex flex-col shrink-0">
-        {/* Search & Tabs */}
-        <div className="p-3 border-b border-slate-100 bg-slate-50/50 space-y-2">
+    <div className="wa-inbox h-full w-full flex overflow-hidden bg-[#111b21]">
+      {/* ===== Left: Chat list (WhatsApp style) ===== */}
+      <div className="w-full max-w-[400px] md:w-[400px] flex flex-col shrink-0 bg-white border-r border-[#d1d7db]">
+        <div className="h-[60px] px-4 bg-[#f0f2f5] flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="wa-avatar wa-avatar-sm bg-[#dfe5e7] text-[#54656f]">
+              <MessageSquarePlus className="w-5 h-5" />
+            </div>
+            <span className="font-medium text-[#111b21] text-[16px]">Chats</span>
+          </div>
+          <div className="flex items-center gap-1 text-[#54656f]">
+            <button
+              type="button"
+              onClick={() => setIsTemplateModalOpen(true)}
+              className="p-2 rounded-full hover:bg-black/5"
+              title="Send template"
+            >
+              <FileText className="w-5 h-5" />
+            </button>
+            <button
+              type="button"
+              onClick={fetchConversations}
+              className="p-2 rounded-full hover:bg-black/5"
+              title="Refresh"
+            >
+              <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        </div>
+
+        <div className="px-3 py-2 bg-white">
           <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+            <Search className="w-4 h-4 text-[#54656f] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search leads & messages..."
+              placeholder="Search or start a new chat"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-100"
+              className="w-full pl-10 pr-3 py-2 text-[14px] bg-[#f0f2f5] rounded-lg border-0 outline-none text-[#111b21] placeholder:text-[#667781]"
             />
           </div>
-
-          <div className="flex gap-1">
+          <div className="flex gap-1.5 mt-2 overflow-x-auto pb-0.5">
             {['all', 'open', 'pending', 'resolved'].map((st) => (
               <button
                 key={st}
+                type="button"
                 onClick={() => setStatusFilter(st)}
-                className={`px-2.5 py-1 text-xs font-medium rounded-lg capitalize transition-colors ${
-                  statusFilter === st ? 'bg-blue-600 text-white shadow-xs' : 'text-slate-600 hover:bg-slate-200/60'
+                className={`px-3 py-1 text-[12px] font-medium rounded-full capitalize whitespace-nowrap transition-colors ${
+                  statusFilter === st
+                    ? 'bg-[#e7fce3] text-[#008069]'
+                    : 'bg-[#f0f2f5] text-[#54656f] hover:bg-[#e9edef]'
                 }`}
               >
                 {st}
@@ -404,375 +483,334 @@ const InboxPage = () => {
           </div>
         </div>
 
-        {/* Conversation Items */}
-        <div className="flex-1 overflow-y-auto divide-y divide-slate-100">
+        <div className="flex-1 overflow-y-auto">
           {conversations.length === 0 ? (
-            <div className="p-8 text-center text-slate-400 text-xs">
-              No conversations found.
-            </div>
+            <div className="p-10 text-center text-[#667781] text-sm">No chats yet</div>
           ) : (
             conversations.map((conv) => {
               const isSelected = conv._id === activeConvId;
               const contact = conv.contactId;
-
               return (
-                <div
+                <button
                   key={conv._id}
+                  type="button"
                   onClick={() => setActiveConvId(conv._id)}
-                  className={`p-3.5 cursor-pointer transition-colors ${
-                    isSelected ? 'bg-blue-50/80 border-l-4 border-blue-600' : 'hover:bg-slate-50'
+                  className={`w-full flex items-center gap-3 px-3 py-3 text-left border-b border-[#f0f2f5] transition-colors ${
+                    isSelected ? 'bg-[#f0f2f5]' : 'hover:bg-[#f5f6f6]'
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="truncate flex-1">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-semibold text-xs text-slate-900 truncate">
-                          {contact?.name || 'Unknown Lead'}
-                        </span>
-                        {conv.sessionStatus === 'ACTIVE' || (conv.isWindowOpen && conv.hasCustomerMessaged) ? (
-                          <span
-                            className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"
-                            title={`24h Window Active (${Math.round(conv.windowExpiresInHours || 24)}h left)`}
-                          />
-                        ) : conv.sessionStatus === 'EXPIRED' ? (
-                          <span
-                            className="w-2 h-2 rounded-full bg-amber-400 shrink-0"
-                            title="24h Window Expired (Template Required)"
-                          />
-                        ) : (
-                          <span
-                            className="w-2 h-2 rounded-full bg-slate-300 ring-1 ring-slate-400/50 shrink-0"
-                            title="No Inbound Message Yet (Template Required to Start)"
-                          />
+                  <div className="wa-avatar">{contactInitial(contact?.name)}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium text-[16px] text-[#111b21] truncate">
+                        {contact?.name || 'Unknown'}
+                      </span>
+                      <span className="text-[12px] text-[#667781] shrink-0">
+                        {formatTime(conv.lastMessageAt)}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 mt-0.5">
+                      <p
+                        className={`text-[14px] truncate ${
+                          (conv.unreadCount || 0) > 0
+                            ? 'text-[#111b21] font-semibold'
+                            : 'text-[#667781]'
+                        }`}
+                      >
+                        {conv.lastMessageText || 'Tap to open chat'}
+                      </p>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {(conv.sessionStatus === 'ACTIVE' ||
+                          (conv.isWindowOpen && conv.hasCustomerMessaged)) &&
+                          !(conv.unreadCount > 0) && (
+                          <span className="w-2 h-2 rounded-full bg-[#25d366]" title="24h window open" />
+                        )}
+                        {conv.sessionStatus === 'EXPIRED' && !(conv.unreadCount > 0) && (
+                          <span className="w-2 h-2 rounded-full bg-[#f0b429]" title="Template required" />
+                        )}
+                        {(conv.unreadCount || 0) > 0 && (
+                          <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-[#25d366] text-white text-[11px] font-semibold flex items-center justify-center">
+                            {conv.unreadCount > 99 ? '99+' : conv.unreadCount}
+                          </span>
                         )}
                       </div>
-                      <p className="text-[11px] text-slate-400 font-mono mt-0.5">{contact?.phone || 'No phone'}</p>
                     </div>
-                    <span className="text-[10px] text-slate-400 shrink-0">
-                      {formatTime(conv.lastMessageAt)}
-                    </span>
                   </div>
-
-                  <p className="text-xs text-slate-600 truncate mt-1.5">
-                    {conv.lastMessageText || 'No messages yet'}
-                  </p>
-
-                  <div className="flex items-center gap-1.5 mt-2">
-                    <Badge variant={contact?.leadStage === 'qualified' ? 'green' : 'gray'} size="xs">
-                      {contact?.leadStage || 'new'}
-                    </Badge>
-                    {conv.isBotPaused && (
-                      <Badge variant="purple" size="xs">Human Mode</Badge>
-                    )}
-                  </div>
-                </div>
+                </button>
               );
             })
           )}
         </div>
       </div>
 
-      {/* 2. Middle & Right Chat Window */}
+      {/* ===== Right: Active chat ===== */}
       {activeConv ? (
-        <div className="flex-1 flex flex-col h-full bg-slate-50 overflow-hidden">
-          {/* Active Chat Header */}
-          <div className="h-16 px-6 bg-white border-b border-slate-200/80 flex items-center justify-between shrink-0 shadow-xs">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center font-bold text-sm">
-                {activeConv.contactId?.name?.[0] || 'L'}
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="font-bold text-slate-900 text-sm">{activeConv.contactId?.name}</h3>
-                  <Badge variant="blue" size="xs">{activeConv.contactId?.leadStage || 'new'}</Badge>
-                </div>
-                <p className="text-xs text-slate-500 font-mono">{activeConv.contactId?.phone}</p>
+        <div className="flex-1 flex flex-col min-w-0 bg-[#efeae2]">
+          {/* Chat header */}
+          <div className="h-[60px] px-4 bg-[#f0f2f5] flex items-center justify-between shrink-0 border-l border-[#d1d7db]">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="wa-avatar wa-avatar-sm">{contactInitial(activeConv.contactId?.name)}</div>
+              <div className="min-w-0">
+                <h3 className="font-medium text-[16px] text-[#111b21] truncate leading-tight">
+                  {activeConv.contactId?.name}
+                </h3>
+                <p className="text-[13px] text-[#667781] truncate">
+                  {activeConv.contactId?.phone}
+                  {activeConv.sessionStatus === 'ACTIVE' || (isWindowOpen && activeConv.hasCustomerMessaged)
+                    ? ` · online window ${formatRemainingWindow(activeConv.windowExpiresInHours, activeConv.windowExpiresInMinutes)}`
+                    : activeConv.sessionStatus === 'EXPIRED'
+                      ? ' · 24h window closed'
+                      : ' · send a template to start'}
+                </p>
               </div>
             </div>
 
-            {/* Actions & Window Indicator */}
-            <div className="flex items-center gap-3">
-              {/* 24h Window Badge */}
-              {activeConv.sessionStatus === 'ACTIVE' || (isWindowOpen && activeConv.hasCustomerMessaged) ? (
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-800 text-xs font-semibold rounded-full border border-emerald-200">
-                  <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>24h Active ({formatRemainingWindow(activeConv.windowExpiresInHours, activeConv.windowExpiresInMinutes)})</span>
-                </div>
-              ) : activeConv.sessionStatus === 'EXPIRED' ? (
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-amber-50 text-amber-900 text-xs font-medium rounded-full border border-amber-200">
-                  <Clock className="w-3.5 h-3.5 text-amber-600" />
-                  <span>24h Expired (Template Required)</span>
-                </div>
-              ) : (
-                <div className="flex items-center gap-1.5 px-3 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-full border border-slate-200">
-                  <Clock className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Session Inactive (Send Template to Start)</span>
-                </div>
-              )}
-
-              {/* Bot Pause / Hand-off Button */}
+            <div className="flex items-center gap-1 text-[#54656f] relative">
+              <button
+                type="button"
+                onClick={() => setIsTemplateModalOpen(true)}
+                className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[13px] font-medium bg-[#00a884] text-white hover:bg-[#008f72]"
+              >
+                <FileText className="w-4 h-4" />
+                Template
+              </button>
               <button
                 type="button"
                 onClick={handleToggleBot}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5 border ${
+                className={`inline-flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-full text-[12px] font-semibold border transition-colors ${
                   activeConv.isBotPaused
-                    ? 'bg-purple-100 text-purple-800 border-purple-300'
-                    : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                    ? 'bg-[#fff3cd] text-[#664d03] border-[#ffecb5] hover:bg-[#ffe69c]'
+                    : 'bg-[#e7fce3] text-[#008069] border-[#c6f0c2] hover:bg-[#d9fdd3]'
                 }`}
+                title={
+                  activeConv.isBotPaused
+                    ? 'Chatbot is OFF for this chat (human mode). Click to turn bot ON.'
+                    : 'Chatbot is ON for this chat. Click to pause bot (human mode).'
+                }
               >
-                <Bot className="w-3.5 h-3.5" />
-                <span>{activeConv.isBotPaused ? 'Bot Paused (Human)' : 'Bot Active'}</span>
+                <span
+                  className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                    activeConv.isBotPaused ? 'bg-[#f0b429] text-white' : 'bg-[#00a884] text-white'
+                  }`}
+                >
+                  <Bot className="w-3.5 h-3.5" />
+                </span>
+                <span>{activeConv.isBotPaused ? 'Bot OFF' : 'Bot ON'}</span>
               </button>
-
-              {/* Notes Drawer Toggle */}
               <button
                 type="button"
                 onClick={() => setIsNoteDrawerOpen(!isNoteDrawerOpen)}
-                className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors"
-                title="View Contact Details & Notes"
+                className="p-2 rounded-full hover:bg-black/5"
+                title="Contact info"
               >
-                <StickyNote className="w-4 h-4" />
+                <StickyNote className="w-5 h-5" />
               </button>
+              <button
+                type="button"
+                onClick={() => setHeaderMenuOpen(!headerMenuOpen)}
+                className="p-2 rounded-full hover:bg-black/5"
+              >
+                <MoreVertical className="w-5 h-5" />
+              </button>
+              {headerMenuOpen && (
+                <div className="absolute right-0 top-12 z-20 w-52 bg-white rounded-md shadow-lg border border-[#e9edef] py-1 text-[14px]">
+                  <button
+                    type="button"
+                    className="w-full text-left px-4 py-2.5 hover:bg-[#f0f2f5] text-[#111b21]"
+                    onClick={() => {
+                      setIsTemplateModalOpen(true);
+                      setHeaderMenuOpen(false);
+                    }}
+                  >
+                    Send template message
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-4 py-2.5 hover:bg-[#f0f2f5] text-[#111b21]"
+                    onClick={() => {
+                      setIsNoteDrawerOpen(true);
+                      setHeaderMenuOpen(false);
+                    }}
+                  >
+                    Contact info
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Message Thread Area */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto wa-chat-wallpaper px-4 md:px-16 py-3 space-y-1">
             {chatLoading ? (
-              <div className="flex justify-center p-8">
-                <RefreshCw className="w-6 h-6 animate-spin text-slate-400" />
+              <div className="flex justify-center p-10">
+                <RefreshCw className="w-6 h-6 animate-spin text-[#667781]" />
               </div>
             ) : (
-              activeData?.messages?.map((msg) => {
-                const isOutbound = msg.direction === 'outbound';
-                const isBot = msg.senderType === 'bot';
-
-                return (
-                  <div
-                    key={msg._id}
-                    className={`flex flex-col ${isOutbound ? 'items-end' : 'items-start'}`}
-                  >
-                    <div
-                      className={`max-w-lg rounded-2xl px-4 py-2.5 shadow-xs text-sm relative ${
-                        isOutbound
-                          ? isBot
-                            ? 'bg-purple-600 text-white rounded-br-xs'
-                            : 'bg-blue-600 text-white rounded-br-xs'
-                          : 'bg-white text-slate-800 border border-slate-200/80 rounded-bl-xs'
-                      }`}
-                    >
-                      {/* Sender label */}
-                      {isBot && (
-                        <span className="block text-[10px] font-bold text-purple-200 uppercase tracking-wide mb-1">
-                          Automated Chatbot
-                        </span>
-                      )}
-
-                      {/* Media Image / Document Preview */}
-                      {(msg.messageType === 'image' || (msg.messageType === 'template' && msg.mediaUrl)) && msg.mediaUrl && (
-                        <div className="mb-2 rounded-lg overflow-hidden border border-white/20">
-                          <img
-                            src={getMediaUrl(msg.mediaUrl)}
-                            alt="WhatsApp attachment"
-                            className="max-h-60 w-auto object-cover rounded-lg"
-                          />
-                        </div>
-                      )}
-
-                      {/* Content */}
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</p>
-
-                      {/* Timestamp & Status ticks */}
-                      <div
-                        className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${
-                          isOutbound ? 'text-white/80' : 'text-slate-400'
-                        }`}
-                      >
-                        <span>{formatTime(msg.sentAt || msg.createdAt)}</span>
-                        {isOutbound && (
-                          <span title={msg.status === 'failed' ? msg.errorMessage || 'Failed' : msg.status}>
-                            {msg.status === 'read' ? (
-                              <CheckCheck className="w-3.5 h-3.5 text-blue-300 inline" />
-                            ) : msg.status === 'delivered' ? (
-                              <CheckCheck className="w-3.5 h-3.5 inline" />
-                            ) : msg.status === 'failed' ? (
-                              <AlertCircle className="w-3.5 h-3.5 text-amber-200 inline" />
-                            ) : msg.status === 'pending' ? (
-                              <Clock className="w-3.5 h-3.5 inline opacity-80" />
-                            ) : (
-                              <Check className="w-3.5 h-3.5 inline" />
-                            )}
-                          </span>
-                        )}
-                      </div>
-                      {isOutbound && msg.status === 'failed' && (
-                        <p className="mt-1.5 text-[10px] leading-snug text-amber-100/95 bg-black/20 rounded-lg px-2 py-1">
-                          Not delivered: {msg.errorMessage || 'Media header rejected by WhatsApp. Re-send with a freshly uploaded image.'}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
+              activeData?.messages?.map((msg) => <WhatsAppMessageBubble key={msg._id} msg={msg} />)
             )}
             <div ref={messagesEndRef} />
           </div>
 
-          {/* 3. Reply / Input Box Area */}
-          <div className="p-4 bg-white border-t border-slate-200/80 shrink-0">
-            {isWindowOpen && activeConv?.hasCustomerMessaged ? (
-              /* Free-Form Reply Input (24h Window Active) */
-              <form onSubmit={handleSendText} className="flex items-center gap-2">
+          {/* Composer */}
+          <div className="bg-[#f0f2f5] px-2 py-2.5 shrink-0">
+            {canFreeform ? (
+              <form onSubmit={handleSendText} className="flex items-end gap-2">
+                <button
+                  type="button"
+                  className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full"
+                  title="Emoji"
+                >
+                  <Smile className="w-6 h-6" />
+                </button>
                 <button
                   type="button"
                   onClick={() => setIsMediaModalOpen(true)}
-                  className="p-2.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors"
-                  title="Attach Image or Document"
+                  className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full"
+                  title="Attach"
                 >
-                  <Paperclip className="w-5 h-5" />
+                  <Paperclip className="w-6 h-6" />
                 </button>
-
                 <button
                   type="button"
                   onClick={() => setIsTemplateModalOpen(true)}
-                  className="px-3 py-2 text-xs font-semibold text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-xl transition-colors shrink-0"
+                  className="p-2.5 text-[#54656f] hover:text-[#111b21] rounded-full sm:hidden"
+                  title="Template"
                 >
-                  Send Template
+                  <FileText className="w-6 h-6" />
                 </button>
-
                 <input
                   type="text"
-                  placeholder="Type a message to reply on WhatsApp..."
+                  placeholder="Type a message"
                   value={textInput}
                   onChange={(e) => setTextInput(e.target.value)}
-                  className="flex-1 px-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  className="wa-composer-input"
                 />
-
-                <Button
+                <button
                   type="submit"
-                  variant="primary"
-                  size="md"
                   disabled={!textInput.trim() || sending}
-                  isLoading={sending}
-                  icon={Send}
+                  className="wa-send-btn"
+                  aria-label="Send"
                 >
-                  Send
-                </Button>
+                  <Send className="w-5 h-5" />
+                </button>
               </form>
             ) : (
-              /* 24-Hour Window Closed / Inactive Banner */
-              <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 bg-amber-100 text-amber-700 rounded-xl shrink-0 mt-0.5">
-                    <Clock className="w-4 h-4" />
-                  </div>
-                  <div className="text-xs text-amber-900">
-                    <p className="font-bold">
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 px-2">
+                <div className="flex-1 flex items-start gap-2 bg-[#fff3cd] text-[#664d03] rounded-lg px-3 py-2.5 text-[13px]">
+                  <Clock className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">
                       {!activeConv?.hasCustomerMessaged
-                        ? '24-Hour Customer Window Not Started'
-                        : '24-Hour Customer Service Window Closed'}
+                        ? 'Messaging window not started'
+                        : '24-hour messaging window closed'}
                     </p>
-                    <p className="text-amber-800 mt-0.5 leading-relaxed">
-                      {!activeConv?.hasCustomerMessaged
-                        ? 'This contact has not sent an inbound message yet. Meta WhatsApp policy strictly requires sending an approved Template Message to initiate the conversation.'
-                        : 'More than 24 hours have elapsed since the customer last replied. Free-form text and image replies are blocked — use Choose & Send Template. For IMAGE templates, upload the header image (logo) and fill all variables before sending.'}
+                    <p className="mt-0.5 opacity-90">
+                      Only approved template messages can be sent. For image templates, upload the header
+                      media before sending.
                     </p>
                   </div>
                 </div>
-                <Button
-                  variant="primary"
-                  size="sm"
+                <button
+                  type="button"
                   onClick={() => setIsTemplateModalOpen(true)}
-                  icon={FileText}
-                  className="shrink-0 whitespace-nowrap"
+                  className="inline-flex items-center justify-center gap-2 px-4 py-3 rounded-full bg-[#00a884] text-white text-[14px] font-medium hover:bg-[#008f72] shrink-0"
                 >
-                  Choose & Send Template
-                </Button>
+                  <FileText className="w-4 h-4" />
+                  Choose template
+                </button>
               </div>
             )}
           </div>
         </div>
       ) : (
-        <div className="flex-1 flex items-center justify-center text-slate-400 text-sm">
-          Select a conversation to view chat history.
+        <div className="flex-1 hidden md:flex flex-col items-center justify-center bg-[#f0f2f5] border-b-[6px] border-[#00a884] text-center px-8">
+          <div className="w-20 h-20 rounded-full bg-[#d1d7db]/20 flex items-center justify-center mb-5">
+            <MessageSquarePlus className="w-10 h-10 text-[#00a884]" />
+          </div>
+          <h2 className="text-[32px] font-light text-[#41525d]">WhatsApp Business Inbox</h2>
+          <p className="mt-3 max-w-md text-[14px] text-[#667781] leading-relaxed">
+            Select a chat to read messages. When the 24-hour window is closed, send an approved template —
+            the preview shows exactly how WhatsApp will display it.
+          </p>
         </div>
       )}
 
-      {/* 4. Notes & Contact Profile Side Drawer */}
+      {/* Contact drawer */}
       {isNoteDrawerOpen && activeConv && (
-        <div className="w-80 border-l border-slate-200 bg-white p-5 flex flex-col shrink-0 animate-in slide-in-from-right duration-200">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-            <h4 className="font-bold text-slate-900 text-sm">Lead Details & Notes</h4>
-            <button onClick={() => setIsNoteDrawerOpen(false)} className="text-slate-400 hover:text-slate-600 text-xs">
-              Close
+        <div className="w-80 bg-white border-l border-[#d1d7db] flex flex-col shrink-0">
+          <div className="h-[60px] px-4 bg-[#008069] text-white flex items-center gap-3 shrink-0">
+            <button type="button" onClick={() => setIsNoteDrawerOpen(false)} className="p-1">
+              <X className="w-5 h-5" />
             </button>
+            <span className="font-medium">Contact info</span>
           </div>
-
-          <div className="py-4 space-y-3 text-xs border-b border-slate-100">
-            <div>
-              <span className="text-slate-400">Lead Name</span>
-              <p className="font-semibold text-slate-800 text-sm">{activeConv.contactId?.name}</p>
-            </div>
-            <div>
-              <span className="text-slate-400">Phone Number</span>
-              <p className="font-semibold text-slate-800 font-mono">{activeConv.contactId?.phone}</p>
-            </div>
-            <div>
-              <span className="text-slate-400">Assigned Agent</span>
-              <select
-                value={activeConv.assignedAgentId?._id || activeConv.assignedAgentId || ''}
-                onChange={(e) => handleAssignAgent(e.target.value)}
-                className="w-full mt-1 px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-              >
-                <option value="">Unassigned</option>
-                {teamMembers.map((m) => (
-                  <option key={m._id} value={m._id}>{m.name} ({m.role})</option>
-                ))}
-              </select>
-            </div>
+          <div className="p-6 flex flex-col items-center bg-[#f0f2f5] border-b border-[#e9edef]">
+            <div className="wa-avatar w-28 h-28 text-4xl mb-3">{contactInitial(activeConv.contactId?.name)}</div>
+            <p className="text-[20px] text-[#111b21] font-medium">{activeConv.contactId?.name}</p>
+            <p className="text-[14px] text-[#667781] font-mono mt-1">{activeConv.contactId?.phone}</p>
+            <Badge variant="green" size="xs" className="mt-2">
+              {activeConv.contactId?.leadStage || 'new'}
+            </Badge>
           </div>
-
-          {/* Internal Notes */}
-          <div className="flex-1 overflow-y-auto py-3 space-y-2">
-            <h5 className="font-semibold text-slate-700 text-xs">Internal CRM Notes</h5>
+          <div className="p-4 space-y-3 text-sm border-b border-[#e9edef]">
+            <label className="block text-[12px] text-[#667781]">Assigned agent</label>
+            <select
+              value={activeConv.assignedAgentId?._id || activeConv.assignedAgentId || ''}
+              onChange={(e) => handleAssignAgent(e.target.value)}
+              className="w-full px-3 py-2 bg-[#f0f2f5] rounded-lg text-[14px] outline-none"
+            >
+              <option value="">Unassigned</option>
+              {teamMembers.map((m) => (
+                <option key={m._id} value={m._id}>
+                  {m.name} ({m.role})
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            <h5 className="text-[12px] font-semibold text-[#667781] uppercase">Notes</h5>
             {activeConv.contactId?.notes?.length === 0 ? (
-              <p className="text-slate-400 text-xs italic">No notes yet.</p>
+              <p className="text-[#667781] text-xs italic">No notes yet.</p>
             ) : (
               activeConv.contactId?.notes?.map((n, i) => (
-                <div key={i} className="p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-xs space-y-1">
-                  <p className="text-slate-800">{n.text}</p>
-                  <p className="text-[10px] text-slate-400">{n.authorName} &bull; {formatDate(n.createdAt)}</p>
+                <div key={i} className="p-3 bg-[#f0f2f5] rounded-lg text-[13px]">
+                  <p className="text-[#111b21]">{n.text}</p>
+                  <p className="text-[11px] text-[#667781] mt-1">
+                    {n.authorName} · {formatDate(n.createdAt)}
+                  </p>
                 </div>
               ))
             )}
           </div>
-
-          <form onSubmit={handleAddNote} className="pt-3 border-t border-slate-100">
+          <form onSubmit={handleAddNote} className="p-3 border-t border-[#e9edef]">
             <input
               type="text"
-              placeholder="Add quick lead note..."
+              placeholder="Add a note..."
               value={newNoteText}
               onChange={(e) => setNewNoteText(e.target.value)}
-              className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl mb-2 focus:bg-white"
+              className="w-full px-3 py-2 text-[13px] bg-[#f0f2f5] rounded-lg mb-2 outline-none"
             />
             <Button type="submit" variant="secondary" size="sm" className="w-full">
-              Add Note
+              Add note
             </Button>
           </form>
         </div>
       )}
 
-      {/* Template Picker Modal (SOP compliant with Media Header support) */}
+      {/* Template modal with live WhatsApp preview */}
       <Modal
         isOpen={isTemplateModalOpen}
         onClose={() => setIsTemplateModalOpen(false)}
-        title="Send Pre-Approved WhatsApp Template"
-        size="lg"
+        title="Send WhatsApp template"
+        size="2xl"
+        contentClassName="min-h-[70vh]"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setIsTemplateModalOpen(false)}>Cancel</Button>
+            <Button variant="secondary" onClick={() => setIsTemplateModalOpen(false)}>
+              Cancel
+            </Button>
             <Button
-              variant="primary"
+              variant="whatsapp"
               onClick={handleSendTemplate}
               disabled={
                 !selectedTemplate ||
@@ -782,325 +820,291 @@ const InboxPage = () => {
               }
               isLoading={sending}
             >
-              Send Template
+              Send on WhatsApp
             </Button>
           </>
         }
       >
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-2">Select Template</label>
-            <div className="space-y-2 max-h-48 overflow-y-auto">
-              {templates.map((tmpl) => (
-                <div
-                  key={tmpl._id}
-                  onClick={() => {
-                    setSelectedTemplate(tmpl);
-                    setTemplateParams({});
-                    // Never pre-fill Meta header_handle values — they are not sendable media URLs
-                    const usable = isUsableMediaRef(tmpl.header?.mediaUrl) ? tmpl.header.mediaUrl : '';
-                    setHeaderMediaUrl(usable);
-                    setHeaderText(tmpl.header?.text || '');
-                  }}
-                  className={`p-3 border rounded-xl cursor-pointer text-xs transition-colors ${
-                    selectedTemplate?._id === tmpl._id
-                      ? 'border-blue-500 bg-blue-50/50'
-                      : 'border-slate-200 hover:bg-slate-50'
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    {tmpl.header?.format === 'IMAGE' && isUsableMediaRef(tmpl.header?.mediaUrl) && (
-                      <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-100 mt-0.5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 min-h-[65vh]">
+          {/* Left: pick + configure */}
+          <div className="space-y-4 min-w-0 flex flex-col">
+            <div className="flex flex-col min-h-0 flex-1">
+              <label className="block text-[12px] font-semibold text-[#667781] uppercase mb-2">
+                Approved templates
+              </label>
+              <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+                {templates.map((tmpl) => (
+                  <button
+                    key={tmpl._id}
+                    type="button"
+                    onClick={() => {
+                      setSelectedTemplate(tmpl);
+                      setTemplateParams({});
+                      const usable = isUsableMediaRef(tmpl.header?.mediaUrl) ? tmpl.header.mediaUrl : '';
+                      setHeaderMediaUrl(usable);
+                      setHeaderText(tmpl.header?.text || '');
+                    }}
+                    className={`w-full p-3 border rounded-xl text-left text-xs transition-colors ${
+                      selectedTemplate?._id === tmpl._id
+                        ? 'border-[#00a884] bg-[#e7fce3]'
+                        : 'border-[#e9edef] hover:bg-[#f0f2f5]'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      {tmpl.header?.format === 'IMAGE' && isUsableMediaRef(tmpl.header?.mediaUrl) && (
                         <img
                           src={getMediaUrl(tmpl.header.mediaUrl)}
-                          alt={tmpl.name}
-                          className="w-full h-full object-cover"
+                          alt=""
+                          className="w-11 h-11 rounded-lg object-cover border border-[#e9edef]"
                           onError={(e) => {
                             e.target.style.display = 'none';
                           }}
                         />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between mb-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-900 truncate">{tmpl.name}</span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-[#111b21] truncate">{tmpl.name}</span>
                           {tmpl.header?.format && tmpl.header.format !== 'NONE' && (
-                            <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-blue-100 text-blue-700 rounded-md">
-                              {tmpl.header.format} HEADER
+                            <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-[#d9fdd3] text-[#008069] rounded">
+                              {tmpl.header.format}
                             </span>
                           )}
+                          <Badge variant="green" size="xs">
+                            {tmpl.category}
+                          </Badge>
                         </div>
-                        <Badge variant="green" size="xs">{tmpl.category}</Badge>
+                        <p className="text-[#667781] line-clamp-2 mt-0.5">{tmpl.body?.text}</p>
                       </div>
-                      <p className="text-slate-600 line-clamp-2">{tmpl.body.text}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {selectedTemplate && (
+              <div className="space-y-3 pt-2 border-t border-[#e9edef]">
+                {selectedTemplate.header?.format === 'IMAGE' && (
+                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
+                        <ImageIcon className="w-4 h-4 text-[#00a884]" /> Image header
+                      </span>
+                      <span className="text-[11px] text-[#667781]">JPG / PNG · max 5MB</span>
+                    </div>
+                    <p className="text-[11px] text-[#667781]">
+                      Upload the logo/image WhatsApp will show above the message. Do not use sample CDN
+                      links.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="file"
+                        ref={headerFileInputRef}
+                        accept="image/jpeg,image/png,image/webp"
+                        onChange={handleHeaderFileUpload}
+                        className="hidden"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => headerFileInputRef.current?.click()}
+                        isLoading={uploadingHeaderMedia}
+                        icon={UploadCloud}
+                      >
+                        Upload image
+                      </Button>
+                      <input
+                        type="text"
+                        placeholder="Or public HTTPS image URL"
+                        value={headerMediaUrl}
+                        onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                        className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
+                      />
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          </div>
+                )}
 
-          {selectedTemplate && (
-            <div className="space-y-4 pt-2 border-t border-slate-100">
-              {/* 1. Header Media Configuration (Required if template has IMAGE, DOCUMENT, or VIDEO) */}
-              {selectedTemplate.header?.format === 'IMAGE' && (
-                <div className="p-4 bg-blue-50/60 border border-blue-200/80 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
-                      <ImageIcon className="w-4 h-4 text-blue-600" /> Header Image (Required by Meta)
+                {selectedTemplate.header?.format === 'DOCUMENT' && (
+                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
+                    <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
+                      <FileText className="w-4 h-4 text-[#00a884]" /> Document header (PDF)
                     </span>
-                    <span className="text-[11px] text-blue-600 font-medium">JPG, PNG • Max 5MB</span>
-                  </div>
-                  <p className="text-[11px] text-slate-600">
-                    Upload the image that should appear above the template body (e.g. your logo). Do not use
-                    WhatsApp sample preview links — Meta accepts them then fails delivery. Always click
-                    &quot;Upload New Image&quot; before sending.
-                  </p>
-
-                  {/* Image Preview */}
-                  {isUsableMediaRef(headerMediaUrl) && (
-                    <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-white max-w-sm">
-                      <img
-                        src={getMediaUrl(headerMediaUrl)}
-                        alt="Header Preview"
-                        className="w-full h-36 object-cover"
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                        }}
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="file"
+                        ref={headerFileInputRef}
+                        accept="application/pdf"
+                        onChange={handleHeaderFileUpload}
+                        className="hidden"
                       />
-                      <span className="absolute bottom-2 right-2 px-2 py-0.5 bg-black/60 text-white text-[10px] rounded-md backdrop-blur-xs">
-                        Header Preview
-                      </span>
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => headerFileInputRef.current?.click()}
+                        isLoading={uploadingHeaderMedia}
+                        icon={UploadCloud}
+                      >
+                        Upload PDF
+                      </Button>
+                      <input
+                        type="text"
+                        placeholder="Or public PDF URL"
+                        value={headerMediaUrl}
+                        onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                        className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {selectedTemplate.header?.format === 'VIDEO' && (
+                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
+                    <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
+                      <ImageIcon className="w-4 h-4 text-[#00a884]" /> Video header
+                    </span>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="file"
+                        ref={headerFileInputRef}
+                        accept="video/mp4,video/3gpp"
+                        onChange={handleHeaderFileUpload}
+                        className="hidden"
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => headerFileInputRef.current?.click()}
+                        isLoading={uploadingHeaderMedia}
+                        icon={UploadCloud}
+                      >
+                        Upload video
+                      </Button>
+                      <input
+                        type="text"
+                        placeholder="Or public video URL"
+                        value={headerMediaUrl}
+                        onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                        className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {selectedTemplate.header?.format === 'TEXT' &&
+                  (selectedTemplate.header.text?.match(/\{\{\d+\}\}/g) || []).length > 0 && (
+                    <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
+                      <label className="block text-xs font-bold text-[#111b21]">Header text</label>
+                      <input
+                        type="text"
+                        placeholder="Header title"
+                        value={headerText}
+                        onChange={(e) => setHeaderText(e.target.value)}
+                        className="w-full px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg"
+                      />
                     </div>
                   )}
 
-                  {/* Upload and URL input */}
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="file"
-                      ref={headerFileInputRef}
-                      accept="image/jpeg,image/png,image/webp"
-                      onChange={handleHeaderFileUpload}
-                      className="hidden"
-                    />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => headerFileInputRef.current?.click()}
-                      isLoading={uploadingHeaderMedia}
-                      icon={UploadCloud}
-                      className="shrink-0"
-                    >
-                      Upload New Image
-                    </Button>
-                    <input
-                      type="text"
-                      placeholder="Or enter public Image URL (https://...)"
-                      value={headerMediaUrl}
-                      onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {selectedTemplate.header?.format === 'DOCUMENT' && (
-                <div className="p-4 bg-blue-50/60 border border-blue-200/80 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
-                      <FileText className="w-4 h-4 text-blue-600" /> Header Document (PDF Required by Meta)
-                    </span>
-                    <span className="text-[11px] text-blue-600 font-medium">PDF • Max 100MB</span>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="file"
-                      ref={headerFileInputRef}
-                      accept="application/pdf"
-                      onChange={handleHeaderFileUpload}
-                      className="hidden"
-                    />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => headerFileInputRef.current?.click()}
-                      isLoading={uploadingHeaderMedia}
-                      icon={UploadCloud}
-                      className="shrink-0"
-                    >
-                      Upload PDF
-                    </Button>
-                    <input
-                      type="text"
-                      placeholder="Or enter public PDF URL (https://...)"
-                      value={headerMediaUrl}
-                      onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {selectedTemplate.header?.format === 'VIDEO' && (
-                <div className="p-4 bg-blue-50/60 border border-blue-200/80 rounded-2xl space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
-                      <ImageIcon className="w-4 h-4 text-blue-600" /> Header Video (Required by Meta)
-                    </span>
-                    <span className="text-[11px] text-blue-600 font-medium">MP4 • Max 16MB</span>
-                  </div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      type="file"
-                      ref={headerFileInputRef}
-                      accept="video/mp4,video/3gpp"
-                      onChange={handleHeaderFileUpload}
-                      className="hidden"
-                    />
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => headerFileInputRef.current?.click()}
-                      isLoading={uploadingHeaderMedia}
-                      icon={UploadCloud}
-                      className="shrink-0"
-                    >
-                      Upload Video
-                    </Button>
-                    <input
-                      type="text"
-                      placeholder="Or enter public Video URL (https://...)"
-                      value={headerMediaUrl}
-                      onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {selectedTemplate.header?.format === 'TEXT' && (selectedTemplate.header.text?.match(/\{\{\d+\}\}/g) || []).length > 0 && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                  <label className="block text-xs font-bold text-slate-800 uppercase">
-                    Header Variable (Required)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Enter header title text"
-                    value={headerText}
-                    onChange={(e) => setHeaderText(e.target.value)}
-                    className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                  />
-                </div>
-              )}
-
-              {/* 2. Configure Body Variables */}
-              {(selectedTemplate.body.text.match(/\{\{(\d+)\}\}/g) || []).length > 0 && (
-                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-                  <h5 className="font-bold text-slate-800 text-xs">Configure Template Variables</h5>
-                  {[
-                    ...new Set(
-                      (selectedTemplate.body.text.match(/\{\{(\d+)\}\}/g) || []).map((m) =>
-                        parseInt(m.replace(/\D/g, ''), 10)
+                {(selectedTemplate.body?.text?.match(/\{\{(\d+)\}\}/g) || []).length > 0 && (
+                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
+                    <h5 className="font-bold text-[#111b21] text-xs">Body variables</h5>
+                    {[
+                      ...new Set(
+                        (selectedTemplate.body.text.match(/\{\{(\d+)\}\}/g) || []).map((m) =>
+                          parseInt(m.replace(/\D/g, ''), 10)
+                        )
                       )
-                    )
-                  ]
-                    .filter((n) => !Number.isNaN(n))
-                    .sort((a, b) => a - b)
-                    .map((varNum) => (
-                      <div key={varNum}>
-                        <label className="block text-xs font-medium text-slate-700 mb-1">
-                          Variable {`{{${varNum}}}`} <span className="text-rose-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          placeholder={`e.g. ${selectedTemplate.body.sampleVariables?.[varNum - 1] || 'Value'}`}
-                          value={templateParams[varNum] || ''}
-                          onChange={(e) => setTemplateParams({ ...templateParams, [varNum]: e.target.value })}
-                          className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
-                          required
-                        />
-                      </div>
-                    ))}
-                </div>
-              )}
-
-              {/* 3. Live Message Preview */}
-              <div className="p-3 bg-emerald-50/50 border border-emerald-200/80 rounded-2xl">
-                <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wide block mb-2">
-                  WhatsApp Recipient Preview
-                </span>
-                <div className="bg-[#EFEAE2] p-3 rounded-xl max-w-sm shadow-xs">
-                  <div className="bg-white rounded-lg p-2.5 shadow-xs space-y-2 text-xs">
-                    {selectedTemplate.header?.format === 'IMAGE' && isUsableMediaRef(headerMediaUrl) && (
-                      <img
-                        src={getMediaUrl(headerMediaUrl)}
-                        alt="Header"
-                        className="w-full h-28 object-cover rounded-md"
-                        onError={(e) => {
-                          e.target.style.display = 'none';
-                        }}
-                      />
-                    )}
-                    {selectedTemplate.header?.format === 'TEXT' && selectedTemplate.header.text && (
-                      <p className="font-bold text-slate-900">
-                        {headerText || selectedTemplate.header.text}
-                      </p>
-                    )}
-                    <p className="text-slate-800 whitespace-pre-wrap leading-relaxed">
-                      {selectedTemplate.body.text.replace(/\{\{(\d+)\}\}/g, (_, num) => templateParams[num] || `{{${num}}}`)}
-                    </p>
-                    {selectedTemplate.footer?.text && (
-                      <p className="text-[10px] text-slate-400 border-t border-slate-100 pt-1">
-                        {selectedTemplate.footer.text}
-                      </p>
-                    )}
+                    ]
+                      .filter((n) => !Number.isNaN(n))
+                      .sort((a, b) => a - b)
+                      .map((varNum) => (
+                        <div key={varNum}>
+                          <label className="block text-xs font-medium text-[#54656f] mb-1">
+                            {`{{${varNum}}}`} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            placeholder={
+                              selectedTemplate.body.sampleVariables?.[varNum - 1] || 'Value'
+                            }
+                            value={templateParams[varNum] || ''}
+                            onChange={(e) =>
+                              setTemplateParams({ ...templateParams, [varNum]: e.target.value })
+                            }
+                            className="w-full px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
+                          />
+                        </div>
+                      ))}
                   </div>
-                </div>
+                )}
               </div>
-            </div>
-          )}
+            )}
+          </div>
+
+          {/* Right: live WhatsApp preview by type */}
+          <div className="min-w-0 lg:sticky lg:top-0 self-start">
+            {selectedTemplate ? (
+              <WhatsAppTemplatePreview
+                template={selectedTemplate}
+                headerMediaUrl={headerMediaUrl}
+                headerText={headerText}
+                templateParams={templateParams}
+              />
+            ) : (
+              <div className="wa-preview-frame h-full min-h-[320px] flex items-center justify-center text-[#667781] text-sm">
+                Select a template to see the WhatsApp preview
+              </div>
+            )}
+            {selectedTemplate && (
+              <p className="mt-2 text-[11px] text-[#667781] leading-relaxed">
+                Preview matches WhatsApp rendering for{' '}
+                <strong>{selectedTemplate.header?.format || 'TEXT'}</strong> header
+                {selectedTemplate.buttons?.length
+                  ? ` and ${selectedTemplate.buttons.length} button(s)`
+                  : ''}
+                .
+              </p>
+            )}
+          </div>
         </div>
       </Modal>
 
-      {/* Media Upload Modal */}
+      {/* Media modal */}
       <Modal
         isOpen={isMediaModalOpen}
         onClose={() => setIsMediaModalOpen(false)}
-        title="Upload & Send WhatsApp Media"
+        title="Send photo or document"
         footer={
           <>
-            <Button variant="secondary" onClick={() => setIsMediaModalOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleSendMedia} disabled={!mediaFile || sending} isLoading={sending}>
-              Upload & Send
+            <Button variant="secondary" onClick={() => setIsMediaModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="whatsapp"
+              onClick={handleSendMedia}
+              disabled={!mediaFile || sending}
+              isLoading={sending}
+            >
+              Send
             </Button>
           </>
         }
       >
         <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-2">Select Media File</label>
-            <input
-              type="file"
-              accept="image/*,application/pdf"
-              onChange={(e) => setMediaFile(e.target.files[0])}
-              className="w-full text-xs text-slate-600 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Caption (Optional)</label>
-            <input
-              type="text"
-              placeholder="Add caption..."
-              value={mediaCaption}
-              onChange={(e) => setMediaCaption(e.target.value)}
-              className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl"
-            />
-          </div>
+          <input
+            type="file"
+            accept="image/*,application/pdf"
+            onChange={(e) => setMediaFile(e.target.files[0])}
+            className="w-full text-xs text-[#54656f] file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-[#e7fce3] file:text-[#008069]"
+          />
+          <input
+            type="text"
+            placeholder="Add a caption..."
+            value={mediaCaption}
+            onChange={(e) => setMediaCaption(e.target.value)}
+            className="w-full px-3 py-2 text-sm bg-[#f0f2f5] rounded-lg outline-none"
+          />
         </div>
       </Modal>
     </div>
