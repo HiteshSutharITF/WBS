@@ -392,6 +392,54 @@ class MetaGraphApi {
   }
 
   /**
+   * Upload media for messaging (template headers / image messages).
+   * POST /{phone-number-id}/media → returns media id usable as image.id / video.id / document.id
+   * Prefer this over public link URLs — Meta does not need to fetch your server.
+   */
+  static async uploadMediaForMessaging(phoneNumberId, token, { fileBuffer, mimeType, fileName }) {
+    if (!token || token.startsWith('mock_')) {
+      if (env.ENABLE_MOCK_FALLBACK) {
+        return `mock_media_${Date.now()}`;
+      }
+      throw new Error('Meta API token is required to upload media for messaging.');
+    }
+
+    if (!phoneNumberId) {
+      throw new Error('phoneNumberId is required to upload media for messaging.');
+    }
+
+    try {
+      const FormData = require('form-data');
+      const form = new FormData();
+      form.append('messaging_product', 'whatsapp');
+      form.append('type', mimeType || 'application/octet-stream');
+      form.append('file', fileBuffer, {
+        filename: fileName || 'media.bin',
+        contentType: mimeType || 'application/octet-stream'
+      });
+
+      const response = await metaClient.post(`/${phoneNumberId}/media`, form, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          ...form.getHeaders()
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
+      });
+
+      const mediaId = response.data?.id;
+      if (!mediaId) {
+        throw new Error('Meta media upload succeeded but did not return a media id.');
+      }
+      return mediaId;
+    } catch (error) {
+      const errData = error.response?.data?.error;
+      const errorMsg = errData ? `[Meta ${errData.code}] ${errData.message}` : error.message;
+      throw new Error(errorMsg);
+    }
+  }
+
+  /**
    * Upload sample media for Message Templates via Meta Resumable Upload API
    * Step 1: POST /v25.0/{appId}/uploads?file_length=...&file_type=...&file_name=...
    * Step 2: POST /v25.0/{uploadId} with binary data and file_offset: 0
@@ -454,12 +502,14 @@ class MetaGraphApi {
 
     for (const comp of components) {
       if (comp.type === 'HEADER') {
-        const sampleUrl = comp.example?.header_handle?.[0] || '';
+        // header_handle is a Meta resumable-upload handle (e.g. "4:...").
+        // It is ONLY valid for template creation — never as image.link when sending.
+        const sampleHandle = comp.example?.header_handle?.[0] || '';
         header = {
           format: comp.format || 'NONE',
           text: comp.text || '',
-          mediaUrl: ['IMAGE', 'DOCUMENT', 'VIDEO'].includes(comp.format) ? sampleUrl : '',
-          headerHandle: sampleUrl
+          mediaUrl: '',
+          headerHandle: sampleHandle
         };
       } else if (comp.type === 'BODY') {
         body = {

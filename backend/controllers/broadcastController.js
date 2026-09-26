@@ -4,6 +4,14 @@ const cryptoUtils = require('../utils/cryptoUtils');
 const MetaGraphApi = require('../utils/metaGraphApi');
 const socket = require('../config/socket');
 const env = require('../config/env');
+const {
+  sanitizeMediaReference,
+  toAbsolutePublicUrl,
+  resolveLocalFilePath,
+  guessMimeType
+} = require('../utils/mediaHelpers');
+const fs = require('fs');
+const path = require('path');
 
 const listBroadcasts = async (req, res, next) => {
   try {
@@ -19,7 +27,7 @@ const listBroadcasts = async (req, res, next) => {
 
 const createBroadcast = async (req, res, next) => {
   try {
-    const { name, templateId, targetSegment, variableMapping, scheduledAt } = req.body;
+    const { name, templateId, targetSegment, variableMapping, scheduledAt, headerMediaUrl } = req.body;
 
     const template = await Template.findOne({ _id: templateId, tenantId: req.tenantId });
     if (!template) {
@@ -62,6 +70,7 @@ const createBroadcast = async (req, res, next) => {
       templateId,
       targetSegment: targetSegment || { allOptedIn: true },
       variableMapping: variableMapping || {},
+      headerMediaUrl: headerMediaUrl || template.header?.mediaUrl || '',
       status: scheduledAt ? 'scheduled' : 'draft',
       scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
       totalRecipients: recipients.length,
@@ -152,32 +161,73 @@ const startBroadcast = async (req, res, next) => {
           const headerFormat = broadcast.templateId.header?.format;
           if (headerFormat && headerFormat !== 'NONE') {
             if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
-              let mediaUrl = broadcast.headerMediaUrl || broadcast.templateId.header?.mediaUrl;
-              if (mediaUrl && (mediaUrl.startsWith('/uploads') || mediaUrl.startsWith('uploads'))) {
-                const cleanPath = mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`;
-                mediaUrl = `${env.LIVE_URL}${cleanPath}`;
+              const rawMediaRef = sanitizeMediaReference(
+                broadcast.headerMediaUrl || broadcast.templateId.header?.mediaUrl
+              );
+
+              let mediaObject = null;
+              if (rawMediaRef) {
+                const localPath = resolveLocalFilePath(rawMediaRef);
+                if (localPath) {
+                  try {
+                    const mediaId = await MetaGraphApi.uploadMediaForMessaging(phoneNumberId, token, {
+                      fileBuffer: fs.readFileSync(localPath),
+                      mimeType: guessMimeType(localPath, headerFormat),
+                      fileName: broadcast.templateId.header?.sampleFileName || path.basename(localPath)
+                    });
+                    mediaObject = { id: mediaId };
+                  } catch (uploadErr) {
+                    const publicUrl = toAbsolutePublicUrl(rawMediaRef);
+                    if (
+                      publicUrl &&
+                      /^https:\/\//i.test(publicUrl) &&
+                      env.LIVE_URL &&
+                      publicUrl.startsWith(env.LIVE_URL)
+                    ) {
+                      mediaObject = { link: publicUrl };
+                    } else {
+                      throw uploadErr;
+                    }
+                  }
+                } else {
+                  const publicUrl = toAbsolutePublicUrl(rawMediaRef);
+                  if (
+                    publicUrl &&
+                    /^https:\/\//i.test(publicUrl) &&
+                    !publicUrl.includes('whatsapp.net') &&
+                    !publicUrl.includes('fbcdn.net') &&
+                    !publicUrl.includes('fbsbx.com')
+                  ) {
+                    mediaObject = { link: publicUrl };
+                  }
+                }
               }
-              if (!mediaUrl) {
-                if (headerFormat === 'IMAGE') mediaUrl = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
-                else if (headerFormat === 'DOCUMENT') mediaUrl = `${env.LIVE_URL}/uploads/sample.pdf`;
-                else if (headerFormat === 'VIDEO') mediaUrl = 'https://www.w3schools.com/html/mov_bbb.mp4';
+
+              if (!mediaObject) {
+                throw new Error(
+                  `Template "${broadcast.templateId.name}" requires a ${headerFormat.toLowerCase()} header media URL or upload.`
+                );
               }
+
               if (headerFormat === 'IMAGE') {
                 components.push({
                   type: 'header',
-                  parameters: [{ type: 'image', image: { link: mediaUrl } }]
+                  parameters: [{ type: 'image', image: mediaObject }]
                 });
               } else if (headerFormat === 'VIDEO') {
                 components.push({
                   type: 'header',
-                  parameters: [{ type: 'video', video: { link: mediaUrl } }]
+                  parameters: [{ type: 'video', video: mediaObject }]
                 });
               } else if (headerFormat === 'DOCUMENT') {
                 components.push({
                   type: 'header',
                   parameters: [{
                     type: 'document',
-                    document: { link: mediaUrl, filename: broadcast.templateId.header?.sampleFileName || 'document.pdf' }
+                    document: {
+                      ...mediaObject,
+                      filename: broadcast.templateId.header?.sampleFileName || 'document.pdf'
+                    }
                   }]
                 });
               }

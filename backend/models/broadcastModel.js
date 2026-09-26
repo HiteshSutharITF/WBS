@@ -28,6 +28,10 @@ const broadcastSchema = new mongoose.Schema(
       of: String,
       default: {}
     },
+    headerMediaUrl: {
+      type: String,
+      default: ''
+    },
     status: {
       type: String,
       enum: ['draft', 'scheduled', 'processing', 'completed', 'failed', 'cancelled'],

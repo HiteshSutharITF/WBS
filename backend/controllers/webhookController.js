@@ -392,7 +392,15 @@ async function processMessageStatus(statusObj) {
   if (status === 'read') message.readAt = new Date();
   if (status === 'failed' && statusObj.errors) {
     message.errorCode = String(statusObj.errors[0]?.code || '');
-    message.errorMessage = statusObj.errors[0]?.title || statusObj.errors[0]?.message || 'Message delivery failed';
+    message.errorMessage =
+      statusObj.errors[0]?.error_data?.details ||
+      statusObj.errors[0]?.title ||
+      statusObj.errors[0]?.message ||
+      'Message delivery failed';
+    console.error(
+      `[Webhook] Message FAILED wamid=${wamid} code=${message.errorCode} msg=${message.errorMessage}`,
+      JSON.stringify(statusObj.errors)
+    );
   }
 
   await message.save();

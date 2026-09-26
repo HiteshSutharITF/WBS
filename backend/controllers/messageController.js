@@ -1,9 +1,20 @@
+const fs = require('fs');
+const path = require('path');
 const ApiResponse = require('../utils/apiResponse');
 const { Conversation, Message, Contact, Template, WabaAccount } = require('../models/zindex');
 const cryptoUtils = require('../utils/cryptoUtils');
 const MetaGraphApi = require('../utils/metaGraphApi');
 const socket = require('../config/socket');
 const env = require('../config/env');
+const {
+  sanitizeMediaReference,
+  toAbsolutePublicUrl,
+  resolveLocalFilePath,
+  guessMimeType,
+  countBodyPlaceholders,
+  isMetaHostedSampleUrl,
+  isLocalUploadPath
+} = require('../utils/mediaHelpers');
 
 // Helper to get decrypted token for tenant
 const getTenantWabaContext = async (tenantId) => {
@@ -17,6 +28,126 @@ const getTenantWabaContext = async (tenantId) => {
     phoneNumberId: waba.phoneNumberId,
     token
   };
+};
+
+/**
+ * Resolve template/media header into Meta-ready media object.
+ * ALWAYS prefer media id upload. Never send WhatsApp CDN sample URLs as link
+ * (Meta accepts then fails delivery → orange failed icon in inbox).
+ */
+const resolveHeaderMediaForMeta = async ({
+  rawMediaRef,
+  headerFormat,
+  phoneNumberId,
+  token,
+  sampleFileName,
+  fallbackMediaRef
+}) => {
+  // Prefer a usable ref; if client sent a WhatsApp CDN sample URL, try template local file
+  let sanitized = sanitizeMediaReference(rawMediaRef);
+  if (!sanitized && fallbackMediaRef) {
+    sanitized = sanitizeMediaReference(fallbackMediaRef);
+  }
+
+  if (!sanitized) {
+    const hint = isMetaHostedSampleUrl(rawMediaRef) || isMetaHostedSampleUrl(fallbackMediaRef)
+      ? ' The selected image is a WhatsApp sample CDN URL and cannot be used when sending. Please upload the logo/image file again.'
+      : ' Upload a file or provide a public HTTPS URL hosted on your server.';
+    return {
+      mediaObject: null,
+      displayUrl: null,
+      error: `This template requires a ${String(headerFormat || 'IMAGE').toLowerCase()} header.${hint}`
+    };
+  }
+
+  const displayUrl = toAbsolutePublicUrl(sanitized) || sanitized;
+  const localPath = resolveLocalFilePath(sanitized);
+
+  // Prefer Meta media id (required for reliability; Meta does not need to fetch our host)
+  if (localPath) {
+    try {
+      const fileBuffer = fs.readFileSync(localPath);
+      const mimeType = guessMimeType(localPath, headerFormat);
+      const mediaId = await MetaGraphApi.uploadMediaForMessaging(phoneNumberId, token, {
+        fileBuffer,
+        mimeType,
+        fileName: sampleFileName || path.basename(localPath)
+      });
+      return {
+        mediaObject: { id: mediaId },
+        displayUrl: isLocalUploadPath(sanitized) ? toAbsolutePublicUrl(sanitized) : displayUrl,
+        error: null
+      };
+    } catch (uploadErr) {
+      console.warn('[messageController] Media id upload failed:', uploadErr.message);
+      // Only fall back to link if it is OUR public LIVE_URL (not Meta CDN)
+      const publicLink = toAbsolutePublicUrl(sanitized);
+      if (
+        publicLink &&
+        /^https:\/\//i.test(publicLink) &&
+        !isMetaHostedSampleUrl(publicLink) &&
+        env.LIVE_URL &&
+        publicLink.startsWith(env.LIVE_URL)
+      ) {
+        return { mediaObject: { link: publicLink }, displayUrl: publicLink, error: null };
+      }
+      return {
+        mediaObject: null,
+        displayUrl: null,
+        error: `Failed to upload header media to Meta: ${uploadErr.message}`
+      };
+    }
+  }
+
+  // Remote public HTTPS that is NOT Meta-hosted — Meta will fetch it
+  if (/^https:\/\//i.test(sanitized) && !isMetaHostedSampleUrl(sanitized)) {
+    // Best effort: download and re-upload as media id so Meta does not depend on third-party fetch
+    try {
+      const axios = require('axios');
+      const dl = await axios.get(sanitized, {
+        responseType: 'arraybuffer',
+        timeout: 20000,
+        maxContentLength: 16 * 1024 * 1024
+      });
+      const mimeType =
+        dl.headers['content-type']?.split(';')[0] || guessMimeType(sanitized, headerFormat);
+      const mediaId = await MetaGraphApi.uploadMediaForMessaging(phoneNumberId, token, {
+        fileBuffer: Buffer.from(dl.data),
+        mimeType,
+        fileName: sampleFileName || path.basename(new URL(sanitized).pathname) || 'header.bin'
+      });
+      return { mediaObject: { id: mediaId }, displayUrl: sanitized, error: null };
+    } catch (dlErr) {
+      console.warn('[messageController] Download+reupload failed, using link:', dlErr.message);
+      return { mediaObject: { link: sanitized }, displayUrl: sanitized, error: null };
+    }
+  }
+
+  return {
+    mediaObject: null,
+    displayUrl: null,
+    error:
+      'Header media must be an uploaded file or a public HTTPS URL. WhatsApp sample CDN links cannot be used when sending.'
+  };
+};
+
+const buildHeaderMediaParameter = (headerFormat, mediaObject, sampleFileName) => {
+  if (headerFormat === 'IMAGE') {
+    return { type: 'image', image: mediaObject };
+  }
+  if (headerFormat === 'VIDEO') {
+    return { type: 'video', video: mediaObject };
+  }
+  if (headerFormat === 'DOCUMENT') {
+    return {
+      type: 'document',
+      document: {
+        ...mediaObject,
+        filename: sampleFileName || 'document.pdf'
+      }
+    };
+  }
+  return null;
 };
 
 const sendTextMessage = async (req, res, next) => {
@@ -142,21 +273,38 @@ const sendMediaMessage = async (req, res, next) => {
     }
 
     const relativeMediaUrl = `uploads/media/${req.file.filename}`;
-    const fullMediaUrl = `${env.HOST}/${relativeMediaUrl}`;
+    const fullMediaUrl = `${env.LIVE_URL}/${relativeMediaUrl}`;
     const { phoneNumberId, token } = await getTenantWabaContext(req.tenantId);
 
     const type = mediaType || (req.file.mimetype.startsWith('image/') ? 'image' : 'document');
     const recipientPhone = contact.phone.replace(/[^\d]/g, '');
+
+    // Prefer Meta media id so Meta does not need to fetch our host
+    let mediaPayload;
+    try {
+      const mediaId = await MetaGraphApi.uploadMediaForMessaging(phoneNumberId, token, {
+        fileBuffer: fs.readFileSync(req.file.path),
+        mimeType: req.file.mimetype,
+        fileName: req.file.originalname
+      });
+      mediaPayload = { id: mediaId, caption: caption || '' };
+    } catch (uploadErr) {
+      console.warn('[messageController] Free-form media id upload failed, using public link:', uploadErr.message);
+      if (!/^https:\/\//i.test(fullMediaUrl)) {
+        return ApiResponse.badRequest(
+          res,
+          `Failed to upload media to Meta and no public HTTPS URL is available: ${uploadErr.message}`
+        );
+      }
+      mediaPayload = { link: fullMediaUrl, caption: caption || '' };
+    }
 
     const metaPayload = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: recipientPhone,
       type,
-      [type]: {
-        link: fullMediaUrl,
-        caption: caption || ''
-      }
+      [type]: mediaPayload
     };
 
     let metaRes;
@@ -255,6 +403,23 @@ const sendTemplateMessage = async (req, res, next) => {
       return ApiResponse.badRequest(res, `Template is currently ${template.status}. Only APPROVED templates can be sent.`);
     }
 
+    // Validate body variables against template placeholders
+    const requiredBodyCount = countBodyPlaceholders(template.body?.text || '');
+    const bodyParams = Array.isArray(parameters) ? parameters.map((p) => (p == null ? '' : String(p))) : [];
+    if (requiredBodyCount > 0) {
+      if (bodyParams.length < requiredBodyCount) {
+        return ApiResponse.badRequest(
+          res,
+          `This template requires ${requiredBodyCount} body variable(s). Please fill all {{1}}…{{${requiredBodyCount}}} fields before sending.`
+        );
+      }
+      for (let i = 0; i < requiredBodyCount; i += 1) {
+        if (!bodyParams[i] || !String(bodyParams[i]).trim()) {
+          return ApiResponse.badRequest(res, `Body variable {{${i + 1}}} is required and cannot be empty.`);
+        }
+      }
+    }
+
     const { phoneNumberId, token } = await getTenantWabaContext(req.tenantId);
     const recipientPhone = contact.phone.replace(/[^\d]/g, '');
 
@@ -266,65 +431,51 @@ const sendTemplateMessage = async (req, res, next) => {
     const headerFormat = template.header?.format;
     if (headerFormat && headerFormat !== 'NONE') {
       if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerFormat)) {
-        let mediaUrl = headerMediaUrl || headerMedia?.link || (typeof headerMedia === 'string' ? headerMedia : null) || template.header?.mediaUrl;
+        const rawMediaRef =
+          headerMediaUrl ||
+          headerMedia?.link ||
+          (typeof headerMedia === 'string' ? headerMedia : null) ||
+          template.header?.mediaUrl;
 
-        // If local upload path, prepend public live URL
-        if (mediaUrl && (mediaUrl.startsWith('/uploads') || mediaUrl.startsWith('uploads'))) {
-          const cleanPath = mediaUrl.startsWith('/') ? mediaUrl : `/${mediaUrl}`;
-          mediaUrl = `${env.LIVE_URL}${cleanPath}`;
+        const { mediaObject, displayUrl, error: mediaError } = await resolveHeaderMediaForMeta({
+          rawMediaRef,
+          fallbackMediaRef: template.header?.mediaUrl,
+          headerFormat,
+          phoneNumberId,
+          token,
+          sampleFileName: template.header?.sampleFileName
+        });
+
+        if (mediaError) {
+          return ApiResponse.badRequest(res, mediaError);
         }
 
-        // Reliable fallback placeholder so Meta 132012 never occurs if URL was omitted
-        if (!mediaUrl) {
-          if (headerFormat === 'IMAGE') {
-            mediaUrl = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
-          } else if (headerFormat === 'DOCUMENT') {
-            mediaUrl = `${env.LIVE_URL}/uploads/sample.pdf`;
-          } else if (headerFormat === 'VIDEO') {
-            mediaUrl = 'https://www.w3schools.com/html/mov_bbb.mp4';
-          }
+        if (!mediaObject) {
+          return ApiResponse.badRequest(
+            res,
+            `This template requires a ${headerFormat.toLowerCase()} header. Upload your logo/image file (WhatsApp sample CDN links cannot be used when sending).`
+          );
         }
 
-        resolvedHeaderMediaUrl = mediaUrl;
-
-        if (headerFormat === 'IMAGE') {
+        resolvedHeaderMediaUrl = displayUrl;
+        const headerParam = buildHeaderMediaParameter(
+          headerFormat,
+          mediaObject,
+          template.header?.sampleFileName
+        );
+        if (headerParam) {
           components.push({
             type: 'header',
-            parameters: [
-              {
-                type: 'image',
-                image: { link: mediaUrl }
-              }
-            ]
-          });
-        } else if (headerFormat === 'VIDEO') {
-          components.push({
-            type: 'header',
-            parameters: [
-              {
-                type: 'video',
-                video: { link: mediaUrl }
-              }
-            ]
-          });
-        } else if (headerFormat === 'DOCUMENT') {
-          components.push({
-            type: 'header',
-            parameters: [
-              {
-                type: 'document',
-                document: {
-                  link: mediaUrl,
-                  filename: template.header?.sampleFileName || 'document.pdf'
-                }
-              }
-            ]
+            parameters: [headerParam]
           });
         }
       } else if (headerFormat === 'TEXT') {
         const headerVars = (template.header?.text || '').match(/\{\{(\d+)\}\}/g);
         if (headerVars && headerVars.length > 0) {
-          const textVal = headerText || 'Notification';
+          const textVal = headerText != null && String(headerText).trim() !== '' ? headerText : null;
+          if (!textVal) {
+            return ApiResponse.badRequest(res, 'This template requires a header text variable.');
+          }
           components.push({
             type: 'header',
             parameters: [
@@ -339,10 +490,10 @@ const sendTemplateMessage = async (req, res, next) => {
     }
 
     // 2. BODY Component (Meta parameters for {{1}}, {{2}}, etc.)
-    if (parameters && Array.isArray(parameters) && parameters.length > 0) {
+    if (requiredBodyCount > 0) {
       components.push({
         type: 'body',
-        parameters: parameters.map((param) => ({
+        parameters: bodyParams.slice(0, requiredBodyCount).map((param) => ({
           type: 'text',
           text: String(param)
         }))
@@ -389,10 +540,18 @@ const sendTemplateMessage = async (req, res, next) => {
 
     // Render template body for local preview
     let renderedText = template.body.text;
-    if (parameters && Array.isArray(parameters)) {
-      parameters.forEach((val, idx) => {
-        renderedText = renderedText.replace(new RegExp(`\\{\\{${idx + 1}\\}\\}`, 'g'), val);
-      });
+    bodyParams.forEach((val, idx) => {
+      renderedText = renderedText.replace(new RegExp(`\\{\\{${idx + 1}\\}\\}`, 'g'), val);
+    });
+
+    // Store relative /uploads path when possible so the inbox can preview locally
+    let storedMediaUrl;
+    if (resolvedHeaderMediaUrl) {
+      if (resolvedHeaderMediaUrl.startsWith(env.LIVE_URL)) {
+        storedMediaUrl = resolvedHeaderMediaUrl.slice(env.LIVE_URL.length) || resolvedHeaderMediaUrl;
+      } else {
+        storedMediaUrl = resolvedHeaderMediaUrl;
+      }
     }
 
     const message = await Message.create({
@@ -405,11 +564,11 @@ const sendTemplateMessage = async (req, res, next) => {
       senderId: req.user._id,
       messageType: 'template',
       content: renderedText,
-      mediaUrl: resolvedHeaderMediaUrl || undefined,
+      mediaUrl: storedMediaUrl,
       templateId: template._id,
       templateData: {
         name: template.name,
-        parameters,
+        parameters: bodyParams,
         headerMediaUrl: resolvedHeaderMediaUrl,
         headerFormat: template.header?.format
       },

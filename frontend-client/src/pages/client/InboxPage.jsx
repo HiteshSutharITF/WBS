@@ -26,7 +26,7 @@ import { contactService } from '../../services/contactService';
 import { templateService } from '../../services/templateService';
 import { userService } from '../../services/userService';
 import { getSocket } from '../../utils/socket';
-import { formatTime, formatDate, getMediaUrl } from '../../utils/formatters';
+import { formatTime, formatDate, getMediaUrl, isUsableMediaRef } from '../../utils/formatters';
 import Button from '../../components/common/Button';
 import Badge from '../../components/common/Badge';
 import Modal from '../../components/common/Modal';
@@ -179,9 +179,9 @@ const InboxPage = () => {
           if (!prev) return prev;
           return {
             ...prev,
-            messages: prev.messages.map((m) =>
-              m._id === messageId ? { ...m, status, errorCode, errorMessage } : m
-            )
+      messages: prev.messages.map((m) =>
+            String(m._id) === String(messageId) ? { ...m, status, errorCode, errorMessage } : m
+          )
           };
         });
       }
@@ -243,14 +243,46 @@ const InboxPage = () => {
   // Send Template Message
   const handleSendTemplate = async () => {
     if (!selectedTemplate) return;
+
+    const headerFormat = selectedTemplate.header?.format;
+    if (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(headerFormat) && !isUsableMediaRef(headerMediaUrl)) {
+      alert(
+        `This template requires a ${headerFormat.toLowerCase()} header. Upload a file or paste a public HTTPS URL. Meta sample handles cannot be used when sending.`
+      );
+      return;
+    }
+
+    const bodyMatches = selectedTemplate.body?.text?.match(/\{\{(\d+)\}\}/g) || [];
+    const requiredVarNums = [
+      ...new Set(bodyMatches.map((m) => parseInt(m.replace(/\D/g, ''), 10)).filter((n) => !Number.isNaN(n)))
+    ].sort((a, b) => a - b);
+
+    for (const varNum of requiredVarNums) {
+      if (!templateParams[varNum] || !String(templateParams[varNum]).trim()) {
+        alert(`Please fill body variable {{${varNum}}} before sending.`);
+        return;
+      }
+    }
+
+    if (
+      headerFormat === 'TEXT' &&
+      (selectedTemplate.header.text?.match(/\{\{\d+\}\}/g) || []).length > 0 &&
+      !String(headerText || '').trim()
+    ) {
+      alert('Please fill the header text variable before sending.');
+      return;
+    }
+
     setSending(true);
     try {
-      const paramsArray = Object.keys(templateParams)
-        .sort((a, b) => Number(a) - Number(b))
-        .map((k) => templateParams[k]);
+      const maxVar = requiredVarNums.length ? Math.max(...requiredVarNums) : 0;
+      const paramsArray = [];
+      for (let i = 1; i <= maxVar; i += 1) {
+        paramsArray.push(templateParams[i] != null ? String(templateParams[i]) : '');
+      }
 
       await chatService.sendTemplateMessage(activeConvId, selectedTemplate._id, paramsArray, {
-        headerMediaUrl: headerMediaUrl || undefined,
+        headerMediaUrl: isUsableMediaRef(headerMediaUrl) ? headerMediaUrl : undefined,
         headerText: headerText || undefined
       });
       setIsTemplateModalOpen(false);
@@ -260,7 +292,7 @@ const InboxPage = () => {
       setHeaderText('');
       loadActiveChat(activeConvId);
     } catch (err) {
-      alert(err.message);
+      alert(err.message || 'Failed to send template message.');
     } finally {
       setSending(false);
     }
@@ -558,19 +590,26 @@ const InboxPage = () => {
                       >
                         <span>{formatTime(msg.sentAt || msg.createdAt)}</span>
                         {isOutbound && (
-                          <span>
+                          <span title={msg.status === 'failed' ? msg.errorMessage || 'Failed' : msg.status}>
                             {msg.status === 'read' ? (
                               <CheckCheck className="w-3.5 h-3.5 text-blue-300 inline" />
                             ) : msg.status === 'delivered' ? (
                               <CheckCheck className="w-3.5 h-3.5 inline" />
                             ) : msg.status === 'failed' ? (
-                              <AlertCircle className="w-3.5 h-3.5 text-rose-300 inline" title={msg.errorMessage} />
+                              <AlertCircle className="w-3.5 h-3.5 text-amber-200 inline" />
+                            ) : msg.status === 'pending' ? (
+                              <Clock className="w-3.5 h-3.5 inline opacity-80" />
                             ) : (
                               <Check className="w-3.5 h-3.5 inline" />
                             )}
                           </span>
                         )}
                       </div>
+                      {isOutbound && msg.status === 'failed' && (
+                        <p className="mt-1.5 text-[10px] leading-snug text-amber-100/95 bg-black/20 rounded-lg px-2 py-1">
+                          Not delivered: {msg.errorMessage || 'Media header rejected by WhatsApp. Re-send with a freshly uploaded image.'}
+                        </p>
+                      )}
                     </div>
                   </div>
                 );
@@ -636,7 +675,7 @@ const InboxPage = () => {
                     <p className="text-amber-800 mt-0.5 leading-relaxed">
                       {!activeConv?.hasCustomerMessaged
                         ? 'This contact has not sent an inbound message yet. Meta WhatsApp policy strictly requires sending an approved Template Message to initiate the conversation.'
-                        : 'More than 24 hours have elapsed since the customer last replied. Meta policy requires sending an approved Template Message to re-open the conversation window.'}
+                        : 'More than 24 hours have elapsed since the customer last replied. Free-form text and image replies are blocked — use Choose & Send Template. For IMAGE templates, upload the header image (logo) and fill all variables before sending.'}
                     </p>
                   </div>
                 </div>
@@ -735,7 +774,12 @@ const InboxPage = () => {
             <Button
               variant="primary"
               onClick={handleSendTemplate}
-              disabled={!selectedTemplate || sending || (selectedTemplate.header?.format === 'IMAGE' && !headerMediaUrl)}
+              disabled={
+                !selectedTemplate ||
+                sending ||
+                (['IMAGE', 'DOCUMENT', 'VIDEO'].includes(selectedTemplate?.header?.format) &&
+                  !isUsableMediaRef(headerMediaUrl))
+              }
               isLoading={sending}
             >
               Send Template
@@ -753,8 +797,9 @@ const InboxPage = () => {
                   onClick={() => {
                     setSelectedTemplate(tmpl);
                     setTemplateParams({});
-                    const defaultImg = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
-                    setHeaderMediaUrl(tmpl.header?.mediaUrl || (tmpl.header?.format === 'IMAGE' ? defaultImg : ''));
+                    // Never pre-fill Meta header_handle values — they are not sendable media URLs
+                    const usable = isUsableMediaRef(tmpl.header?.mediaUrl) ? tmpl.header.mediaUrl : '';
+                    setHeaderMediaUrl(usable);
                     setHeaderText(tmpl.header?.text || '');
                   }}
                   className={`p-3 border rounded-xl cursor-pointer text-xs transition-colors ${
@@ -764,14 +809,14 @@ const InboxPage = () => {
                   }`}
                 >
                   <div className="flex items-start gap-3">
-                    {tmpl.header?.format === 'IMAGE' && tmpl.header?.mediaUrl && (
+                    {tmpl.header?.format === 'IMAGE' && isUsableMediaRef(tmpl.header?.mediaUrl) && (
                       <div className="w-12 h-12 rounded-lg overflow-hidden border border-slate-200 shrink-0 bg-slate-100 mt-0.5">
                         <img
                           src={getMediaUrl(tmpl.header.mediaUrl)}
                           alt={tmpl.name}
                           className="w-full h-full object-cover"
                           onError={(e) => {
-                            e.target.src = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=200';
+                            e.target.style.display = 'none';
                           }}
                         />
                       </div>
@@ -807,16 +852,21 @@ const InboxPage = () => {
                     </span>
                     <span className="text-[11px] text-blue-600 font-medium">JPG, PNG • Max 5MB</span>
                   </div>
+                  <p className="text-[11px] text-slate-600">
+                    Upload the image that should appear above the template body (e.g. your logo). Do not use
+                    WhatsApp sample preview links — Meta accepts them then fails delivery. Always click
+                    &quot;Upload New Image&quot; before sending.
+                  </p>
 
                   {/* Image Preview */}
-                  {headerMediaUrl && (
+                  {isUsableMediaRef(headerMediaUrl) && (
                     <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-white max-w-sm">
                       <img
                         src={getMediaUrl(headerMediaUrl)}
                         alt="Header Preview"
                         className="w-full h-36 object-cover"
                         onError={(e) => {
-                          e.target.src = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
+                          e.target.style.display = 'none';
                         }}
                       />
                       <span className="absolute bottom-2 right-2 px-2 py-0.5 bg-black/60 text-white text-[10px] rounded-md backdrop-blur-xs">
@@ -894,6 +944,44 @@ const InboxPage = () => {
                 </div>
               )}
 
+              {selectedTemplate.header?.format === 'VIDEO' && (
+                <div className="p-4 bg-blue-50/60 border border-blue-200/80 rounded-2xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 uppercase tracking-wide">
+                      <ImageIcon className="w-4 h-4 text-blue-600" /> Header Video (Required by Meta)
+                    </span>
+                    <span className="text-[11px] text-blue-600 font-medium">MP4 • Max 16MB</span>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      type="file"
+                      ref={headerFileInputRef}
+                      accept="video/mp4,video/3gpp"
+                      onChange={handleHeaderFileUpload}
+                      className="hidden"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => headerFileInputRef.current?.click()}
+                      isLoading={uploadingHeaderMedia}
+                      icon={UploadCloud}
+                      className="shrink-0"
+                    >
+                      Upload Video
+                    </Button>
+                    <input
+                      type="text"
+                      placeholder="Or enter public Video URL (https://...)"
+                      value={headerMediaUrl}
+                      onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                      className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
               {selectedTemplate.header?.format === 'TEXT' && (selectedTemplate.header.text?.match(/\{\{\d+\}\}/g) || []).length > 0 && (
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                   <label className="block text-xs font-bold text-slate-800 uppercase">
@@ -910,26 +998,33 @@ const InboxPage = () => {
               )}
 
               {/* 2. Configure Body Variables */}
-              {(selectedTemplate.body.text.match(/\{\{\d+\}\}/g) || []).length > 0 && (
+              {(selectedTemplate.body.text.match(/\{\{(\d+)\}\}/g) || []).length > 0 && (
                 <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
                   <h5 className="font-bold text-slate-800 text-xs">Configure Template Variables</h5>
-                  {(selectedTemplate.body.text.match(/\{\{\d+\}\}/g) || []).map((match, idx) => {
-                    const varNum = idx + 1;
-                    return (
+                  {[
+                    ...new Set(
+                      (selectedTemplate.body.text.match(/\{\{(\d+)\}\}/g) || []).map((m) =>
+                        parseInt(m.replace(/\D/g, ''), 10)
+                      )
+                    )
+                  ]
+                    .filter((n) => !Number.isNaN(n))
+                    .sort((a, b) => a - b)
+                    .map((varNum) => (
                       <div key={varNum}>
                         <label className="block text-xs font-medium text-slate-700 mb-1">
-                          Variable {`{{${varNum}}}`}
+                          Variable {`{{${varNum}}}`} <span className="text-rose-500">*</span>
                         </label>
                         <input
                           type="text"
-                          placeholder={`e.g. ${selectedTemplate.body.sampleVariables?.[idx] || 'Value'}`}
+                          placeholder={`e.g. ${selectedTemplate.body.sampleVariables?.[varNum - 1] || 'Value'}`}
                           value={templateParams[varNum] || ''}
                           onChange={(e) => setTemplateParams({ ...templateParams, [varNum]: e.target.value })}
                           className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-lg"
+                          required
                         />
                       </div>
-                    );
-                  })}
+                    ))}
                 </div>
               )}
 
@@ -940,13 +1035,13 @@ const InboxPage = () => {
                 </span>
                 <div className="bg-[#EFEAE2] p-3 rounded-xl max-w-sm shadow-xs">
                   <div className="bg-white rounded-lg p-2.5 shadow-xs space-y-2 text-xs">
-                    {selectedTemplate.header?.format === 'IMAGE' && headerMediaUrl && (
+                    {selectedTemplate.header?.format === 'IMAGE' && isUsableMediaRef(headerMediaUrl) && (
                       <img
                         src={getMediaUrl(headerMediaUrl)}
                         alt="Header"
                         className="w-full h-28 object-cover rounded-md"
                         onError={(e) => {
-                          e.target.src = 'https://images.unsplash.com/photo-1579208575657-c595a053b977?w=1000&auto=format&fit=crop&q=80';
+                          e.target.style.display = 'none';
                         }}
                       />
                     )}

@@ -5,6 +5,7 @@ const cryptoUtils = require('../utils/cryptoUtils');
 const MetaGraphApi = require('../utils/metaGraphApi');
 const env = require('../config/env');
 const { validateTemplateCreate } = require('../validations/templateValidation');
+const { sanitizeMediaReference, isMetaMediaHandle, isMetaHostedSampleUrl } = require('../utils/mediaHelpers');
 
 const listTemplates = async (req, res, next) => {
   try {
@@ -15,7 +16,33 @@ const listTemplates = async (req, res, next) => {
     if (status && status !== 'all') filter.status = status;
 
     const templates = await Template.find(filter).sort({ createdAt: -1 });
-    return ApiResponse.success(res, 'Templates retrieved successfully.', templates);
+
+    // Strip Meta handles + WhatsApp CDN sample URLs so Inbox never treats them
+    // as sendable image links (those cause accepted→failed delivery).
+    const cleaned = templates.map((tmpl) => {
+      const obj = tmpl.toObject();
+      const media = obj.header?.mediaUrl || '';
+      if (media && (isMetaMediaHandle(media) || isMetaHostedSampleUrl(media) || !sanitizeMediaReference(media))) {
+        if (isMetaMediaHandle(media) && !obj.header.headerHandle) {
+          obj.header.headerHandle = media;
+        }
+        obj.header.mediaUrl = '';
+        Template.updateOne(
+          { _id: tmpl._id },
+          {
+            $set: {
+              'header.mediaUrl': '',
+              ...(obj.header.headerHandle ? { 'header.headerHandle': obj.header.headerHandle } : {})
+            }
+          }
+        ).catch(() => {});
+      } else if (obj.header?.mediaUrl) {
+        obj.header.mediaUrl = sanitizeMediaReference(obj.header.mediaUrl) || '';
+      }
+      return obj;
+    });
+
+    return ApiResponse.success(res, 'Templates retrieved successfully.', cleaned);
   } catch (error) {
     next(error);
   }
@@ -200,12 +227,19 @@ const syncTemplates = async (req, res, next) => {
           name: item.name.toLowerCase()
         });
 
-        // Preserve local mediaUrl if Meta didn't provide one
-        if (existingTmpl?.header?.mediaUrl && !header.mediaUrl) {
+        // Always preserve a real local/public mediaUrl. Meta sync only returns
+        // header_handle (stored on headerHandle) — never overwrite a usable send URL.
+        const { sanitizeMediaReference } = require('../utils/mediaHelpers');
+        if (existingTmpl?.header?.mediaUrl && sanitizeMediaReference(existingTmpl.header.mediaUrl)) {
           header.mediaUrl = existingTmpl.header.mediaUrl;
+        } else {
+          header.mediaUrl = sanitizeMediaReference(header.mediaUrl) || '';
         }
         if (existingTmpl?.header?.sampleFileName && !header.sampleFileName) {
           header.sampleFileName = existingTmpl.header.sampleFileName;
+        }
+        if (existingTmpl?.header?.headerHandle && !header.headerHandle) {
+          header.headerHandle = existingTmpl.header.headerHandle;
         }
 
         // Upsert so both existing AND previously approved Meta templates are fetched/imported!
