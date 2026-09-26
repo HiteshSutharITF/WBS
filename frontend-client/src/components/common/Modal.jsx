@@ -11,7 +11,7 @@ import { X } from 'lucide-react';
  * 5. Responsive: Bottom sheet on mobile screens
  * 6. Body scroll locking when open
  */
-const Modal = ({ isOpen, onClose, title, children, footer, size = 'md', contentClassName = '' }) => {
+const Modal = ({ isOpen, onClose, title, children, footer, size = 'md', contentClassName = '', flush = false }) => {
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === 'Escape' && isOpen) {
@@ -56,23 +56,25 @@ const Modal = ({ isOpen, onClose, title, children, footer, size = 'md', contentC
         role="dialog"
         aria-modal="true"
       >
-        <div className="shrink-0 flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-white">
-          <h3 className="text-lg font-semibold text-slate-800">{title}</h3>
+        <div className="shrink-0 flex items-center justify-between px-5 sm:px-6 py-3.5 border-b border-[#e9edef] bg-white">
+          <h3 className="text-[17px] font-semibold text-[#111b21]">{title}</h3>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+            className="p-1.5 text-[#54656f] hover:text-[#111b21] hover:bg-[#f0f2f5] rounded-full transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className={`flex-1 overflow-y-auto px-6 py-5 text-slate-700 min-h-0 ${contentClassName}`}>
+        <div
+          className={`flex-1 overflow-y-auto text-slate-700 min-h-0 ${flush ? 'p-0' : 'px-6 py-5'} ${contentClassName}`}
+        >
           {children}
         </div>
 
         {footer && (
-          <div className="shrink-0 flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/70">
+          <div className="shrink-0 flex items-center justify-end gap-3 px-5 sm:px-6 py-3.5 border-t border-[#e9edef] bg-[#f0f2f5]/80">
             {footer}
           </div>
         )}

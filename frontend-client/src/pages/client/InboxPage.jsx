@@ -378,7 +378,8 @@ const InboxPage = () => {
     ].sort((a, b) => a - b);
 
     for (const varNum of requiredVarNums) {
-      if (!templateParams[varNum] || !String(templateParams[varNum]).trim()) {
+      const val = templateParams[varNum] ?? templateParams[String(varNum)];
+      if (!val || !String(val).trim()) {
         alert(`Please fill body variable {{${varNum}}} before sending.`);
         return;
       }
@@ -398,7 +399,8 @@ const InboxPage = () => {
       const maxVar = requiredVarNums.length ? Math.max(...requiredVarNums) : 0;
       const paramsArray = [];
       for (let i = 1; i <= maxVar; i += 1) {
-        paramsArray.push(templateParams[i] != null ? String(templateParams[i]) : '');
+        const val = templateParams[i] ?? templateParams[String(i)];
+        paramsArray.push(val != null ? String(val) : '');
       }
 
       await chatService.sendTemplateMessage(activeConvId, selectedTemplate._id, paramsArray, {
@@ -1044,8 +1046,9 @@ const InboxPage = () => {
         isOpen={isTemplateModalOpen}
         onClose={() => setIsTemplateModalOpen(false)}
         title="Send WhatsApp template"
-        size="2xl"
-        contentClassName="min-h-[70vh]"
+        size="4xl"
+        flush
+        contentClassName="overflow-hidden flex flex-col"
         footer={
           <>
             <Button variant="secondary" onClick={() => setIsTemplateModalOpen(false)}>
@@ -1067,245 +1070,277 @@ const InboxPage = () => {
           </>
         }
       >
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 min-h-[65vh]">
+        <div className="wa-tpl-modal-grid">
           {/* Left: pick + configure */}
-          <div className="space-y-4 min-w-0 flex flex-col">
-            <div className="flex flex-col min-h-0 flex-1">
-              <label className="block text-[12px] font-semibold text-[#667781] uppercase mb-2">
+          <div className="wa-tpl-modal-left">
+            <div className="wa-tpl-modal-left-scroll">
+              <label className="block text-[11px] font-semibold text-[#667781] uppercase tracking-wide mb-2 px-1">
                 Approved templates
               </label>
-              <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
-                {templates.map((tmpl) => (
-                  <button
-                    key={tmpl._id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedTemplate(tmpl);
-                      setTemplateParams({});
-                      const usable = isUsableMediaRef(tmpl.header?.mediaUrl) ? tmpl.header.mediaUrl : '';
-                      setHeaderMediaUrl(usable);
-                      setHeaderText(tmpl.header?.text || '');
-                    }}
-                    className={`w-full p-3 border rounded-xl text-left text-xs transition-colors ${
-                      selectedTemplate?._id === tmpl._id
-                        ? 'border-[#00a884] bg-[#e7fce3]'
-                        : 'border-[#e9edef] hover:bg-[#f0f2f5]'
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      {tmpl.header?.format === 'IMAGE' && isUsableMediaRef(tmpl.header?.mediaUrl) && (
-                        <img
-                          src={getMediaUrl(tmpl.header.mediaUrl)}
-                          alt=""
-                          className="w-11 h-11 rounded-lg object-cover border border-[#e9edef]"
-                          onError={(e) => {
-                            e.target.style.display = 'none';
-                          }}
-                        />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-semibold text-[#111b21] truncate">{tmpl.name}</span>
-                          {tmpl.header?.format && tmpl.header.format !== 'NONE' && (
-                            <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-[#d9fdd3] text-[#008069] rounded">
-                              {tmpl.header.format}
+              <div className="space-y-2">
+                {templates.length === 0 ? (
+                  <p className="text-sm text-[#667781] px-1 py-6 text-center">No approved templates yet.</p>
+                ) : (
+                  templates.map((tmpl) => (
+                    <button
+                      key={tmpl._id}
+                      type="button"
+                      onClick={() => {
+                        setSelectedTemplate(tmpl);
+                        setTemplateParams({});
+                        const usable = isUsableMediaRef(tmpl.header?.mediaUrl) ? tmpl.header.mediaUrl : '';
+                        setHeaderMediaUrl(usable);
+                        setHeaderText(tmpl.header?.text || '');
+                      }}
+                      className={`w-full p-3 border rounded-xl text-left text-xs transition-colors ${
+                        selectedTemplate?._id === tmpl._id
+                          ? 'border-[#00a884] bg-[#e7fce3] shadow-sm'
+                          : 'border-[#e9edef] bg-white hover:bg-[#f0f2f5]'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        {tmpl.header?.format === 'IMAGE' && isUsableMediaRef(tmpl.header?.mediaUrl) ? (
+                          <img
+                            src={getMediaUrl(tmpl.header.mediaUrl)}
+                            alt=""
+                            className="w-12 h-12 rounded-lg object-cover border border-[#e9edef] shrink-0"
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                        ) : tmpl.header?.format === 'IMAGE' ? (
+                          <div className="w-12 h-12 rounded-lg bg-[#dfe5e7] flex items-center justify-center shrink-0">
+                            <ImageIcon className="w-5 h-5 text-[#667781]" />
+                          </div>
+                        ) : null}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-[13px] text-[#111b21] truncate max-w-full">
+                              {tmpl.name}
                             </span>
-                          )}
-                          <Badge variant="green" size="xs">
-                            {tmpl.category}
-                          </Badge>
+                            {tmpl.header?.format && tmpl.header.format !== 'NONE' && (
+                              <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-[#d9fdd3] text-[#008069] rounded">
+                                {tmpl.header.format}
+                              </span>
+                            )}
+                            <Badge variant="green" size="xs">
+                              {tmpl.category}
+                            </Badge>
+                          </div>
+                          <p className="text-[#667781] line-clamp-2 mt-1 leading-snug">{tmpl.body?.text}</p>
                         </div>
-                        <p className="text-[#667781] line-clamp-2 mt-0.5">{tmpl.body?.text}</p>
                       </div>
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  ))
+                )}
               </div>
-            </div>
 
-            {selectedTemplate && (
-              <div className="space-y-3 pt-2 border-t border-[#e9edef]">
-                {selectedTemplate.header?.format === 'IMAGE' && (
-                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
-                        <ImageIcon className="w-4 h-4 text-[#00a884]" /> Image header
-                      </span>
-                      <span className="text-[11px] text-[#667781]">JPG / PNG · max 5MB</span>
-                    </div>
-                    <p className="text-[11px] text-[#667781]">
-                      Upload the logo/image WhatsApp will show above the message. Do not use sample CDN
-                      links.
-                    </p>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="file"
-                        ref={headerFileInputRef}
-                        accept="image/jpeg,image/png,image/webp"
-                        onChange={handleHeaderFileUpload}
-                        className="hidden"
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => headerFileInputRef.current?.click()}
-                        isLoading={uploadingHeaderMedia}
-                        icon={UploadCloud}
-                      >
-                        Upload image
-                      </Button>
-                      <input
-                        type="text"
-                        placeholder="Or public HTTPS image URL"
-                        value={headerMediaUrl}
-                        onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                        className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {selectedTemplate.header?.format === 'DOCUMENT' && (
-                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
-                    <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
-                      <FileText className="w-4 h-4 text-[#00a884]" /> Document header (PDF)
-                    </span>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="file"
-                        ref={headerFileInputRef}
-                        accept="application/pdf"
-                        onChange={handleHeaderFileUpload}
-                        className="hidden"
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => headerFileInputRef.current?.click()}
-                        isLoading={uploadingHeaderMedia}
-                        icon={UploadCloud}
-                      >
-                        Upload PDF
-                      </Button>
-                      <input
-                        type="text"
-                        placeholder="Or public PDF URL"
-                        value={headerMediaUrl}
-                        onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                        className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {selectedTemplate.header?.format === 'VIDEO' && (
-                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
-                    <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
-                      <ImageIcon className="w-4 h-4 text-[#00a884]" /> Video header
-                    </span>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="file"
-                        ref={headerFileInputRef}
-                        accept="video/mp4,video/3gpp"
-                        onChange={handleHeaderFileUpload}
-                        className="hidden"
-                      />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => headerFileInputRef.current?.click()}
-                        isLoading={uploadingHeaderMedia}
-                        icon={UploadCloud}
-                      >
-                        Upload video
-                      </Button>
-                      <input
-                        type="text"
-                        placeholder="Or public video URL"
-                        value={headerMediaUrl}
-                        onChange={(e) => setHeaderMediaUrl(e.target.value)}
-                        className="flex-1 px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {selectedTemplate.header?.format === 'TEXT' &&
-                  (selectedTemplate.header.text?.match(/\{\{\d+\}\}/g) || []).length > 0 && (
-                    <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
-                      <label className="block text-xs font-bold text-[#111b21]">Header text</label>
-                      <input
-                        type="text"
-                        placeholder="Header title"
-                        value={headerText}
-                        onChange={(e) => setHeaderText(e.target.value)}
-                        className="w-full px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg"
-                      />
+              {selectedTemplate && (
+                <div className="space-y-3 mt-4 pt-4 border-t border-[#e9edef]">
+                  {selectedTemplate.header?.format === 'IMAGE' && (
+                    <div className="p-3.5 bg-[#f0f2f5] rounded-xl space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
+                          <ImageIcon className="w-4 h-4 text-[#00a884]" /> Image header
+                        </span>
+                        <span className="text-[11px] text-[#667781]">JPG / PNG · max 5MB</span>
+                      </div>
+                      {isUsableMediaRef(headerMediaUrl) && (
+                        <div className="rounded-lg overflow-hidden border border-[#d1d7db] bg-white">
+                          <img
+                            src={getMediaUrl(headerMediaUrl)}
+                            alt="Header preview"
+                            className="w-full max-h-36 object-cover block"
+                          />
+                        </div>
+                      )}
+                      <div className="flex flex-col gap-2">
+                        <input
+                          type="file"
+                          ref={headerFileInputRef}
+                          accept="image/jpeg,image/png,image/webp"
+                          onChange={handleHeaderFileUpload}
+                          className="hidden"
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => headerFileInputRef.current?.click()}
+                          isLoading={uploadingHeaderMedia}
+                          icon={UploadCloud}
+                        >
+                          {isUsableMediaRef(headerMediaUrl) ? 'Replace image' : 'Upload image'}
+                        </Button>
+                        <input
+                          type="text"
+                          placeholder="Or public HTTPS image URL"
+                          value={headerMediaUrl}
+                          onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                          className="w-full px-3 py-2 text-[13px] bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
+                        />
+                      </div>
                     </div>
                   )}
 
-                {(selectedTemplate.body?.text?.match(/\{\{(\d+)\}\}/g) || []).length > 0 && (
-                  <div className="p-3 bg-[#f0f2f5] rounded-xl space-y-2">
-                    <h5 className="font-bold text-[#111b21] text-xs">Body variables</h5>
-                    {[
-                      ...new Set(
-                        (selectedTemplate.body.text.match(/\{\{(\d+)\}\}/g) || []).map((m) =>
-                          parseInt(m.replace(/\D/g, ''), 10)
+                  {selectedTemplate.header?.format === 'DOCUMENT' && (
+                    <div className="p-3.5 bg-[#f0f2f5] rounded-xl space-y-2.5">
+                      <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
+                        <FileText className="w-4 h-4 text-[#00a884]" /> Document header (PDF)
+                      </span>
+                      <div className="flex flex-col gap-2">
+                        <input
+                          type="file"
+                          ref={headerFileInputRef}
+                          accept="application/pdf"
+                          onChange={handleHeaderFileUpload}
+                          className="hidden"
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => headerFileInputRef.current?.click()}
+                          isLoading={uploadingHeaderMedia}
+                          icon={UploadCloud}
+                        >
+                          Upload PDF
+                        </Button>
+                        <input
+                          type="text"
+                          placeholder="Or public PDF URL"
+                          value={headerMediaUrl}
+                          onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                          className="w-full px-3 py-2 text-[13px] bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedTemplate.header?.format === 'VIDEO' && (
+                    <div className="p-3.5 bg-[#f0f2f5] rounded-xl space-y-2.5">
+                      <span className="text-xs font-bold text-[#111b21] flex items-center gap-1.5">
+                        <ImageIcon className="w-4 h-4 text-[#00a884]" /> Video header
+                      </span>
+                      <div className="flex flex-col gap-2">
+                        <input
+                          type="file"
+                          ref={headerFileInputRef}
+                          accept="video/mp4,video/3gpp"
+                          onChange={handleHeaderFileUpload}
+                          className="hidden"
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => headerFileInputRef.current?.click()}
+                          isLoading={uploadingHeaderMedia}
+                          icon={UploadCloud}
+                        >
+                          Upload video
+                        </Button>
+                        <input
+                          type="text"
+                          placeholder="Or public video URL"
+                          value={headerMediaUrl}
+                          onChange={(e) => setHeaderMediaUrl(e.target.value)}
+                          className="w-full px-3 py-2 text-[13px] bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedTemplate.header?.format === 'TEXT' &&
+                    (selectedTemplate.header.text?.match(/\{\{\d+\}\}/g) || []).length > 0 && (
+                      <div className="p-3.5 bg-[#f0f2f5] rounded-xl space-y-2">
+                        <label className="block text-xs font-bold text-[#111b21]">Header text</label>
+                        <input
+                          type="text"
+                          placeholder="Header title"
+                          value={headerText}
+                          onChange={(e) => setHeaderText(e.target.value)}
+                          className="w-full px-3 py-2 text-[13px] bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
+                        />
+                      </div>
+                    )}
+
+                  {(selectedTemplate.body?.text?.match(/\{\{(\d+)\}\}/g) || []).length > 0 && (
+                    <div className="p-3.5 bg-[#f0f2f5] rounded-xl space-y-2.5">
+                      <h5 className="font-bold text-[#111b21] text-xs">Body variables</h5>
+                      {[
+                        ...new Set(
+                          (selectedTemplate.body.text.match(/\{\{(\d+)\}\}/g) || []).map((m) =>
+                            parseInt(m.replace(/\D/g, ''), 10)
+                          )
                         )
-                      )
-                    ]
-                      .filter((n) => !Number.isNaN(n))
-                      .sort((a, b) => a - b)
-                      .map((varNum) => (
-                        <div key={varNum}>
-                          <label className="block text-xs font-medium text-[#54656f] mb-1">
-                            {`{{${varNum}}}`} <span className="text-rose-500">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            placeholder={
-                              selectedTemplate.body.sampleVariables?.[varNum - 1] || 'Value'
-                            }
-                            value={templateParams[varNum] || ''}
-                            onChange={(e) =>
-                              setTemplateParams({ ...templateParams, [varNum]: e.target.value })
-                            }
-                            className="w-full px-3 py-1.5 text-xs bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
-                          />
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            )}
+                      ]
+                        .filter((n) => !Number.isNaN(n))
+                        .sort((a, b) => a - b)
+                        .map((varNum) => (
+                          <div key={varNum}>
+                            <label className="block text-xs font-medium text-[#54656f] mb-1">
+                              {`{{${varNum}}}`} <span className="text-rose-500">*</span>
+                            </label>
+                            <input
+                              type="text"
+                              placeholder={
+                                selectedTemplate.body.sampleVariables?.[varNum - 1] || 'Enter value'
+                              }
+                              value={templateParams[varNum] || templateParams[String(varNum)] || ''}
+                              onChange={(e) =>
+                                setTemplateParams((prev) => ({
+                                  ...prev,
+                                  [String(varNum)]: e.target.value
+                                }))
+                              }
+                              className="w-full px-3 py-2 text-[13px] bg-white border border-[#d1d7db] rounded-lg outline-none focus:border-[#00a884]"
+                            />
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Right: live WhatsApp preview by type */}
-          <div className="min-w-0 lg:sticky lg:top-0 self-start">
-            {selectedTemplate ? (
-              <WhatsAppTemplatePreview
-                template={selectedTemplate}
-                headerMediaUrl={headerMediaUrl}
-                headerText={headerText}
-                templateParams={templateParams}
-              />
-            ) : (
-              <div className="wa-preview-frame h-full min-h-[320px] flex items-center justify-center text-[#667781] text-sm">
-                Select a template to see the WhatsApp preview
-              </div>
-            )}
+          {/* Right: live WhatsApp preview */}
+          <div className="wa-tpl-modal-right">
+            <div className="wa-tpl-modal-preview-wrap">
+              {selectedTemplate ? (
+                <WhatsAppTemplatePreview
+                  template={selectedTemplate}
+                  headerMediaUrl={headerMediaUrl}
+                  headerText={headerText}
+                  templateParams={templateParams}
+                  contactName={contactName}
+                />
+              ) : (
+                <div className="wa-preview-frame wa-preview-empty">
+                  <div className="wa-preview-chat-header">
+                    <div className="wa-avatar wa-avatar-sm">?</div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[15px] font-medium text-[#111b21] leading-tight">WhatsApp</p>
+                      <p className="text-[12px] text-[#667781] leading-tight">Preview</p>
+                    </div>
+                  </div>
+                  <div className="wa-chat-wallpaper wa-preview-wallpaper flex-1 flex items-center justify-center p-6">
+                    <p className="text-[14px] text-[#667781] text-center max-w-[220px] leading-relaxed">
+                      Select a template to see how it will look on WhatsApp
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
             {selectedTemplate && (
-              <p className="mt-2 text-[11px] text-[#667781] leading-relaxed">
-                Preview matches WhatsApp rendering for{' '}
-                <strong>{selectedTemplate.header?.format || 'TEXT'}</strong> header
+              <p className="mt-2.5 text-[11px] text-[#667781] leading-relaxed px-0.5">
+                Live preview for{' '}
+                <strong className="text-[#54656f]">{selectedTemplate.header?.format || 'TEXT'}</strong> header
                 {selectedTemplate.buttons?.length
-                  ? ` and ${selectedTemplate.buttons.length} button(s)`
+                  ? ` · ${selectedTemplate.buttons.length} button(s)`
                   : ''}
-                .
+                . Upload media and fill variables to match the final send.
               </p>
             )}
           </div>

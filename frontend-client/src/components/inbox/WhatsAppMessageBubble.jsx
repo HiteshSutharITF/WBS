@@ -212,63 +212,80 @@ export const WhatsAppTemplatePreview = ({
   headerMediaUrl = '',
   headerText = '',
   templateParams = {},
+  contactName = 'Customer',
   showPhoneFrame = true
 }) => {
   if (!template) return null;
 
   const headerFormat = template.header?.format || 'NONE';
-  const renderedBody = (template.body?.text || '').replace(
-    /\{\{(\d+)\}\}/g,
-    (_, num) =>
-      templateParams[num] != null && String(templateParams[num]).trim() !== ''
-        ? String(templateParams[num])
-        : `{{${num}}}`
-  );
+  const resolveParam = (n) => {
+    const v = templateParams[n] ?? templateParams[String(n)] ?? templateParams[Number(n)];
+    if (v == null) return null;
+    const s = String(v).trim();
+    return s !== '' ? s : null;
+  };
+
+  const renderedBody = (template.body?.text || '').replace(/\{\{(\d+)\}\}/g, (_, num) => {
+    return resolveParam(num) ?? `{{${num}}}`;
+  });
 
   const renderedHeaderText = (() => {
     if (headerFormat !== 'TEXT') return '';
     const raw = template.header?.text || '';
     if (!raw) return headerText || '';
-    return raw.replace(/\{\{(\d+)\}\}/g, () => headerText || '{{1}}');
+    return raw.replace(/\{\{(\d+)\}\}/g, () => (headerText && String(headerText).trim()) || '{{1}}');
   })();
 
   const buttons = Array.isArray(template.buttons) ? template.buttons : [];
+  const hasMedia = isUsableMediaRef(headerMediaUrl);
 
   const bubble = (
-    <div className="wa-bubble wa-bubble-out wa-template-bubble max-w-[280px] w-full shadow-sm">
+    <div className="wa-bubble wa-bubble-out wa-template-bubble w-full max-w-[300px] shadow-sm">
       {headerFormat === 'IMAGE' && (
         <div className="wa-tpl-media">
-          {isUsableMediaRef(headerMediaUrl) ? (
+          {hasMedia ? (
             <img
               src={getMediaUrl(headerMediaUrl)}
               alt="Header"
-              className="w-full max-h-44 object-cover block"
+              className="w-full max-h-52 object-cover block"
               onError={(e) => {
-                e.target.style.display = 'none';
+                e.currentTarget.style.display = 'none';
+                const ph = e.currentTarget.parentElement?.querySelector('.wa-tpl-media-placeholder');
+                if (ph) ph.style.display = 'flex';
               }}
             />
-          ) : (
-            <div className="wa-tpl-media-placeholder">
-              <span>Header image</span>
-              <span className="text-[10px] opacity-70">Upload required</span>
-            </div>
-          )}
+          ) : null}
+          <div
+            className="wa-tpl-media-placeholder"
+            style={hasMedia ? { display: 'none' } : undefined}
+          >
+            <ImageOff className="w-7 h-7 opacity-50" />
+            <span>Header image</span>
+            <span className="text-[10px] opacity-70">Upload required</span>
+          </div>
         </div>
       )}
 
       {headerFormat === 'VIDEO' && (
         <div className="wa-tpl-media wa-tpl-video">
-          {isUsableMediaRef(headerMediaUrl) ? (
-            <video src={getMediaUrl(headerMediaUrl)} className="w-full max-h-44 object-cover block" muted playsInline />
+          {hasMedia ? (
+            <video
+              src={getMediaUrl(headerMediaUrl)}
+              className="w-full max-h-52 object-cover block"
+              muted
+              playsInline
+            />
           ) : (
             <div className="wa-tpl-media-placeholder">
               <Play className="w-8 h-8 opacity-80" />
               <span className="text-[10px]">Video header</span>
             </div>
           )}
-          <div className="wa-tpl-play">
-            <Play className="w-5 h-5 fill-white text-white" />
-          </div>
+          {hasMedia && (
+            <div className="wa-tpl-play">
+              <Play className="w-5 h-5 fill-white text-white" />
+            </div>
+          )}
         </div>
       )}
 
@@ -295,7 +312,8 @@ export const WhatsAppTemplatePreview = ({
           <p className="text-[12px] text-[#667781] mt-1.5 leading-snug">{template.footer.text}</p>
         )}
         <div className="wa-meta">
-          <span>Preview</span>
+          <span className="wa-meta-time">12:00</span>
+          <CheckCheck className="w-3.5 h-3.5 inline text-[#53bdeb]" />
         </div>
       </div>
 
@@ -316,9 +334,17 @@ export const WhatsAppTemplatePreview = ({
   if (!showPhoneFrame) return bubble;
 
   return (
-    <div className="wa-preview-frame">
-      <div className="wa-preview-label">WhatsApp preview</div>
-      <div className="wa-chat-wallpaper wa-preview-wallpaper p-3 flex justify-end">{bubble}</div>
+    <div className="wa-preview-frame wa-preview-phone">
+      <div className="wa-preview-chat-header">
+        <div className="wa-avatar wa-avatar-sm">{(contactName?.[0] || 'C').toUpperCase()}</div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[15px] font-medium text-[#111b21] truncate leading-tight">{contactName || 'Customer'}</p>
+          <p className="text-[12px] text-[#667781] leading-tight">WhatsApp preview</p>
+        </div>
+      </div>
+      <div className="wa-chat-wallpaper wa-preview-wallpaper p-3 sm:p-4 flex justify-end items-start">
+        {bubble}
+      </div>
     </div>
   );
 };
