@@ -575,7 +575,12 @@ export const WhatsAppMessageBubble = ({
         </div>
 
         {!deleted && (
-          <div className="wa-msg-actions opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-within:opacity-100 flex flex-col gap-1">
+          <div className="wa-msg-actions opacity-100 md:opacity-0 md:group-hover:opacity-100 focus-within:opacity-100">
+            {canReply && typeof onReply === 'function' && (
+              <button type="button" onClick={() => onReply(msg)} className="wa-reply-btn" title="Reply">
+                <Reply className="w-4 h-4" />
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -587,11 +592,6 @@ export const WhatsAppMessageBubble = ({
             >
               <MoreVertical className="w-4 h-4" />
             </button>
-            {canReply && typeof onReply === 'function' && (
-              <button type="button" onClick={() => onReply(msg)} className="wa-reply-btn" title="Reply">
-                <Reply className="w-4 h-4" />
-              </button>
-            )}
           </div>
         )}
       </div>

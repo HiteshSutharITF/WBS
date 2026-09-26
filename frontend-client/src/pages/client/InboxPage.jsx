@@ -833,7 +833,13 @@ const InboxPage = () => {
                   onJumpToReply={jumpToQuotedMessage}
                   onReply={(m) => setReplyToMsg(m)}
                   onReact={handleReactToMessage}
-                  onDelete={(m) => setDeleteTarget(m)}
+                  onDelete={(m) =>
+                    setDeleteTarget({
+                      ...m,
+                      // Meta Cloud API cannot revoke messages on the customer's phone
+                      canDeleteForEveryone: false
+                    })
+                  }
                   onPreviewImage={(src) => setLightboxSrc(src)}
                   currentUserId={currentUser?._id || currentUser?.id}
                 />
@@ -1383,18 +1389,21 @@ const InboxPage = () => {
           <div className="wa-delete-card">
             <h3 className="wa-delete-title">Delete message?</h3>
             <p className="wa-delete-sub">
-              Choose how you want to delete this message. Delete for everyone removes it from this inbox for all
-              agents.
+              {deleteTarget.canDeleteForEveryone
+                ? 'Choose how you want to delete this message.'
+                : 'This will remove the message from your inbox only. Meta WhatsApp Cloud API cannot delete it from the customer’s phone.'}
             </p>
             <div className="wa-delete-actions">
-              <button
-                type="button"
-                className="wa-delete-btn wa-delete-everyone"
-                disabled={deletingMsg}
-                onClick={() => handleConfirmDelete('everyone')}
-              >
-                Delete for everyone
-              </button>
+              {deleteTarget.canDeleteForEveryone ? (
+                <button
+                  type="button"
+                  className="wa-delete-btn wa-delete-everyone"
+                  disabled={deletingMsg}
+                  onClick={() => handleConfirmDelete('everyone')}
+                >
+                  Delete for everyone
+                </button>
+              ) : null}
               <button
                 type="button"
                 className="wa-delete-btn wa-delete-me"

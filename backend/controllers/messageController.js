@@ -687,9 +687,18 @@ const sendTemplateMessage = async (req, res, next) => {
 };
 
 /**
- * Delete a message — WhatsApp-style "for me" or "for everyone".
- * Cloud API cannot remove a delivered bubble from the customer's phone;
- * "for everyone" soft-deletes in the inbox for all agents.
+ * Meta WhatsApp Cloud API does not support revoking a delivered message
+ * from the customer's WhatsApp chat. When Meta adds support, gate it here
+ * (outbound + valid wamid + within allowed window, etc.).
+ */
+const canDeleteForEveryoneOnMeta = (message) => {
+  if (!message) return false;
+  // Cloud API: no documented delete/revoke endpoint for recipient devices.
+  return false;
+};
+
+/**
+ * Delete a message — "for me" always; "for everyone" only when Meta allows it.
  */
 const deleteMessage = async (req, res, next) => {
   try {
@@ -701,71 +710,34 @@ const deleteMessage = async (req, res, next) => {
       return ApiResponse.notFound(res, 'Message not found.');
     }
 
-    if (scope === 'me') {
-      const uid = req.user._id;
-      if (!message.hiddenFor?.some((id) => String(id) === String(uid))) {
-        message.hiddenFor = [...(message.hiddenFor || []), uid];
-        await message.save();
+    if (scope === 'everyone') {
+      if (!canDeleteForEveryoneOnMeta(message)) {
+        return ApiResponse.badRequest(
+          res,
+          'Delete for everyone is not available. Meta WhatsApp Cloud API cannot remove this message from the customer’s phone. Use Delete for me instead.'
+        );
       }
-
-      socket.emitToTenant(req.tenantId, 'message_deleted', {
-        conversationId: message.conversationId,
-        messageId: message._id,
-        scope: 'me',
-        userId: req.user._id
-      });
-
-      return ApiResponse.success(res, 'Message deleted for you.', {
-        messageId: message._id,
-        scope: 'me'
-      });
+      // Reserved for when Meta exposes revoke/delete-for-everyone.
+      return ApiResponse.badRequest(res, 'Delete for everyone is not available for this message.');
     }
 
-    message.deletedForEveryone = true;
-    message.deletedAt = new Date();
-    message.deletedBy = req.user._id;
-    message.content = 'This message was deleted';
-    message.mediaUrl = '';
-    message.reactions = [];
-    await message.save();
-
-    const conversation = await Conversation.findById(message.conversationId);
-    if (conversation) {
-      const lastVisible = await Message.findOne({
-        conversationId: conversation._id,
-        tenantId: req.tenantId,
-        deletedForEveryone: { $ne: true }
-      }).sort({ createdAt: -1 });
-
-      conversation.lastMessageText = lastVisible
-        ? lastVisible.content || `[${(lastVisible.messageType || 'msg').toUpperCase()}]`
-        : 'This message was deleted';
-      conversation.lastMessageAt = lastVisible?.sentAt || lastVisible?.createdAt || new Date();
-      await conversation.save();
-
-      socket.emitToTenant(req.tenantId, 'conversation_updated', {
-        conversationId: conversation._id,
-        lastMessageText: conversation.lastMessageText,
-        lastMessageAt: conversation.lastMessageAt
-      });
+    const uid = req.user._id;
+    if (!message.hiddenFor?.some((id) => String(id) === String(uid))) {
+      message.hiddenFor = [...(message.hiddenFor || []), uid];
+      await message.save();
     }
 
-    socket.emitToConversation(message.conversationId, 'message_updated', message);
-    socket.emitToTenant(req.tenantId, 'message_updated', {
-      conversationId: message.conversationId,
-      message
-    });
     socket.emitToTenant(req.tenantId, 'message_deleted', {
       conversationId: message.conversationId,
       messageId: message._id,
-      scope: 'everyone',
-      message
+      scope: 'me',
+      userId: req.user._id
     });
 
-    return ApiResponse.success(res, 'Message deleted for everyone.', {
+    return ApiResponse.success(res, 'Message deleted for you.', {
       messageId: message._id,
-      scope: 'everyone',
-      message
+      scope: 'me',
+      canDeleteForEveryone: false
     });
   } catch (error) {
     next(error);
